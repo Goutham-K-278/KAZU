@@ -75,9 +75,9 @@ class MemoryMonitor:
         try:
             import resource
 
-            ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # type: ignore[attr-defined]
             # Linux reports KB; macOS reports bytes.
-            rss_bytes = ru_maxrss * 1024 if os.uname().sysname == "Linux" else ru_maxrss
+            rss_bytes = ru_maxrss * 1024 if os.uname().sysname == "Linux" else ru_maxrss  # type: ignore[attr-defined]
             return MemorySample(rss_bytes, rss_bytes, 0, None)
         except (ImportError, AttributeError):
             return MemorySample(0, 0, 0, None)

@@ -46,8 +46,8 @@ def verify_ed25519_signature(
     package is not installed (fail-closed).
     """
     try:
-        from cryptography.exceptions import InvalidSignature
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature  # type: ignore[import-untyped]
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # type: ignore[import-untyped]
     except ImportError:
         return False
 

@@ -75,8 +75,10 @@ class DraftComposer(QFrame):
         """Populate checkboxes from `(pane_id, account_label)` pairs."""
         while self._targets_row.count():
             item = self._targets_row.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
         self._target_checks.clear()
 
         for pane_id, label in targets:

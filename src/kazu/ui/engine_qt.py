@@ -118,7 +118,7 @@ class AgentPage(QWebEnginePage):
 
     def acceptNavigationRequest(
         self,
-        url: QUrl,
+        url: QUrl | str,
         nav_type: QWebEnginePage.NavigationType,
         is_main_frame: bool,
     ) -> bool:
@@ -126,7 +126,8 @@ class AgentPage(QWebEnginePage):
         if not is_main_frame:
             return True
 
-        scheme = url.scheme().lower()
+        qurl = url if isinstance(url, QUrl) else QUrl(url)
+        scheme = qurl.scheme().lower()
 
         # Allow blob: URLs — Claude and other sites use these for file downloads.
         # Qt intercepts blob: navigations that have a Content-Disposition and fires
@@ -139,14 +140,14 @@ class AgentPage(QWebEnginePage):
             return False
 
         decision = self._nav_policy.decide(
-            url=url.toString(),
+            url=qurl.toString(),
             preset=self._preset,
             home_url=self._account.home_url,
         )
         if decision == NavigationAction.ALLOW_IN_PANE:
             return True
         if decision == NavigationAction.OPEN_EXTERNAL:
-            QDesktopServices.openUrl(url)
+            QDesktopServices.openUrl(qurl)
             return False
         return False
 
@@ -156,7 +157,7 @@ class AgentPage(QWebEnginePage):
         popup_page = QWebEnginePage(self.profile(), popup_view)
         popup_view.setPage(popup_page)
 
-        dialog = OAuthPopup(web_view=popup_view, parent=self.parent())
+        dialog = OAuthPopup(web_view=popup_view, parent=self.parent())  # type: ignore[arg-type]
 
         # Track whether this popup visited an auth/OAuth domain so we know
         # whether to reload the main pane when it closes.
@@ -194,7 +195,7 @@ class AgentPage(QWebEnginePage):
             QTimer.singleShot(500, lambda: self.setUrl(home))
 
     def _handle_webauthn_request(self, request: Any) -> None:
-        dialog = WebAuthnDialog(request=request, parent=self.parent())
+        dialog = WebAuthnDialog(request=request, parent=self.parent())  # type: ignore[arg-type]
         dialog.exec()
 
 
@@ -278,7 +279,7 @@ class QtWebEnginePane:
         buf = QBuffer()
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(buf, "PNG")
-        return bytes(buf.data())
+        return bytes(buf.data())  # type: ignore[arg-type]
 
     def focus_view(self) -> bool:
         self._view.setFocus()
