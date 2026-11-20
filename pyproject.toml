@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kazu"
+version = "0.1.0"
+description = "Kazu — a calm, multi-agent desktop workspace for running AI chats side by side."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials>=6.9.0",
+    "PySide6-WebEngine>=6.9.0",
+    "platformdirs>=4.3.0",
+    "psutil>=6.1.0",
+]
+
+[project.optional-dependencies]
+validation = [
+    "pydantic>=2.9.0",
+]
+updates = [
+    "tufup>=0.9.0",
+    "cryptography>=43.0.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-qt>=4.4.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.8.0",
+    "pyright>=1.1.380",
+    "pre-commit>=4.0.0",
+]
+
+[project.gui-scripts]
+kazu = "kazu.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kazu"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID", "S"]
+ignore = ["S101"]  # Allow assert in tests
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"PySide6.QtWebEngineCore".msg = "Only src/kazu/ui/engine_qt.py may import QtWebEngineCore (Rule D5)."
+"PySide6.QtWebEngineWidgets".msg = "Only src/kazu/ui/engine_qt.py may import QtWebEngineWidgets (Rule D5)."
+
+[tool.ruff.lint.per-file-ignores]
+"src/kazu/ui/engine_qt.py" = ["TID251"]
+"scripts/phase0_spike.py" = ["TID251"]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["src", "tests"]
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

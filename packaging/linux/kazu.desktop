@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kazu
+GenericName=Multi-Agent AI Workspace
+Comment=Run multiple AI chats side by side in isolated Spaces
+Exec=/usr/bin/kazu %U
+Icon=kazu
+Terminal=false
+Categories=Network;Utility;Office;
+StartupWMClass=kazu
+Keywords=AI;Claude;ChatGPT;Gemini;Workspace;

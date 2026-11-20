@@ -1,0 +1,29 @@
+name: Kazu CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Ruff lint (includes QtWebEngine banned-import rule)
+        run: uv run ruff check src tests scripts
+      - name: Pyright type check
+        run: uv run pyright
+      - name: Run unit test suite
+        run: uv run pytest --cov=kazu
+      - name: Cold-start import-time check (domain must not pull Qt)
+        run: uv run python -X importtime -c "import kazu.domain.models, kazu.domain.layout, kazu.domain.providers"

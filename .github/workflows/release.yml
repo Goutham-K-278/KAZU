@@ -1,0 +1,112 @@
+name: Build & Publish Native Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies + PyInstaller
+        run: uv sync && uv pip install pyinstaller
+      - name: Build Windows app bundle
+        run: uv run pyinstaller packaging/kazu.spec --noconfirm
+      - name: Build Inno Setup installer (.exe)
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart("v")
+          if (-not $ver -or $ver -eq "main") { $ver = "0.1.0" }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" packaging\windows\kazu.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kazu-windows-installer
+          path: packaging/windows/Output/*.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies + PyInstaller
+        run: uv sync && uv pip install pyinstaller
+      - name: Build Kazu.app
+        run: uv run pyinstaller packaging/kazu.spec --noconfirm
+      - name: Package DMG (drag Kazu.app to Applications)
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          [ "$VER" = "main" ] || [ -z "$VER" ] && VER="0.1.0"
+          mkdir -p dmg_stage
+          cp -R dist/Kazu.app dmg_stage/
+          ln -s /Applications dmg_stage/Applications
+          hdiutil create -volname "Kazu" -srcfolder dmg_stage -ov -format UDZO "Kazu-${VER}-macOS.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kazu-macos-dmg
+          path: Kazu-*-macOS.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies + PyInstaller
+        run: uv sync && uv pip install pyinstaller
+      - name: Build Linux bundle
+        run: uv run pyinstaller packaging/kazu.spec --noconfirm
+      - name: Build .deb package with Applications menu entry & AppArmor profile
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          [ "$VER" = "main" ] || [ -z "$VER" ] && VER="0.1.0"
+          PKG="deb_build/kazu_${VER}_amd64"
+          mkdir -p "$PKG/DEBIAN" "$PKG/opt/kazu" "$PKG/usr/bin" \
+                   "$PKG/usr/share/applications" \
+                   "$PKG/usr/share/icons/hicolor/256x256/apps" \
+                   "$PKG/etc/apparmor.d"
+          cp -R dist/kazu/* "$PKG/opt/kazu/"
+          ln -s /opt/kazu/kazu "$PKG/usr/bin/kazu"
+          cp packaging/linux/kazu.desktop "$PKG/usr/share/applications/kazu.desktop"
+          cp packaging/icons/kazu-256.png "$PKG/usr/share/icons/hicolor/256x256/apps/kazu.png"
+          cp packaging/linux/kazu.apparmor "$PKG/etc/apparmor.d/kazu"
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: kazu
+          Version: ${VER}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Kazu
+          Description: Kazu — Multi-agent desktop AI workspace
+           Run multiple AI chats side by side in isolated Spaces.
+          EOF
+          dpkg-deb --build "$PKG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kazu-linux-deb
+          path: deb_build/*.deb
+
+  publish-release:
+    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          generate_release_notes: true

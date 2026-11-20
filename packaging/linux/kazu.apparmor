@@ -1,0 +1,9 @@
+# AppArmor profile for Ubuntu 23.10+ / 24.04 so Chromium keeps its full sandbox (Problem D2).
+abi <abi/4.0>,
+include <tunables/global>
+
+profile kazu /usr/bin/kazu flags=(unconfined) {
+  userns,
+
+  include if exists <local/kazu>
+}
