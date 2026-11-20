@@ -184,10 +184,14 @@ class AgentPage(QWebEnginePage):
             self._popups.remove(dialog)
         did_oauth = visited_auth is not None and visited_auth[0]
         dialog.deleteLater()
-        # Reload the main pane so it picks up the session cookie set during OAuth.
-        # 400 ms delay lets the browser commit any pending cookie writes first.
         if did_oauth:
-            QTimer.singleShot(400, lambda: self.triggerAction(QWebEnginePage.WebAction.Reload))
+            # Navigate to the account's home URL (not a raw reload) so a stale
+            # OAuth callback URL in the pane cannot trigger another Google auth
+            # round-trip, which would cause a 400 Bad Request.
+            # The session cookie is already written to the shared profile, so
+            # loading home URL will give the app a fresh, authenticated page load.
+            home = QUrl(self._account.home_url)
+            QTimer.singleShot(500, lambda: self.setUrl(home))
 
     def _handle_webauthn_request(self, request: Any) -> None:
         dialog = WebAuthnDialog(request=request, parent=self.parent())
