@@ -7,7 +7,7 @@ name = "kazu"
 version = "0.1.0"
 description = "Kazu — a calm, multi-agent desktop workspace for running AI chats side by side."
 readme = "README.md"
-license = { text = "MIT" }
+
 requires-python = ">=3.11"
 dependencies = [
     "PySide6-Essentials>=6.9.0",

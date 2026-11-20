@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Windows-10%2F11-blue?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/macOS-12%2B-lightgrey?style=flat-square&logo=apple" alt="macOS">
   <img src="https://img.shields.io/badge/Linux-deb%20%2F%20Flatpak-orange?style=flat-square&logo=linux" alt="Linux">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License">
+
 </p>
 
 ---
@@ -190,12 +190,6 @@ Push a version tag and GitHub Actions will build and attach the Windows `.exe`, 
 git tag v0.1.0
 git push origin v0.1.0
 ```
-
----
-
-## License
-
-MIT © Goutham K, see [LICENSE](LICENSE) for details.
 
 ---
 
