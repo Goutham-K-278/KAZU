@@ -14,6 +14,28 @@ GOOGLE_BLOCK_MARKERS: tuple[str, ...] = (
     "couldn't sign you in",
 )
 
+# OAuth / SSO identity-provider domains that must stay in-pane so the session
+# cookie is written to this profile after the callback redirect.  These are
+# pure identity-provider hosts (no content to browse), so allowing all paths
+# is safe.  For dual-purpose hosts like github.com the path-based check below
+# is used instead.
+OAUTH_PASSTHROUGH_DOMAINS: tuple[str, ...] = (
+    "accounts.google.com",
+    "oauth2.googleapis.com",
+    "login.microsoftonline.com",   # Microsoft / Azure AD
+    "login.live.com",              # Microsoft personal
+    "appleid.apple.com",           # Sign in with Apple
+    "auth0.com",                   # Auth0 (used by many SaaS apps)
+    "okta.com",                    # Okta SSO
+)
+
+# Dual-purpose hosts: only treat as OAuth when the path starts with one of
+# these prefixes (e.g. github.com/login/oauth but NOT github.com/openai).
+OAUTH_PATH_PREFIXES: dict[str, tuple[str, ...]] = {
+    "github.com": ("/login/oauth", "/login/device"),
+    "gitlab.com": ("/oauth",),
+}
+
 
 class NavigationAction(StrEnum):
     """Decision for a navigation request inside an embedded pane."""
@@ -44,6 +66,20 @@ class NavigationPolicy:
         host = (parsed.hostname or "").lower()
         if not host:
             return NavigationAction.BLOCK_UNSAFE
+
+        # OAuth / SSO round-trip: keep identity-provider pages in-pane so the
+        # session cookie is written to this profile, not the system browser.
+        for auth_domain in OAUTH_PASSTHROUGH_DOMAINS:
+            if host == auth_domain or host.endswith(f".{auth_domain}"):
+                return NavigationAction.ALLOW_IN_PANE
+
+        # Path-scoped OAuth check for dual-purpose hosts (e.g. github.com).
+        path = parsed.path.lower()
+        for dual_host, prefixes in OAUTH_PATH_PREFIXES.items():
+            if (host == dual_host or host.endswith(f".{dual_host}")) and any(
+                path.startswith(p) for p in prefixes
+            ):
+                return NavigationAction.ALLOW_IN_PANE
 
         allowed = set(preset.allowed_domains)
         home_host = (urlparse(home_url).hostname or "").lower()
