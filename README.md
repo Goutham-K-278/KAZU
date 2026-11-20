@@ -21,11 +21,11 @@
 
 ## What is Kazu?
 
-You probably have five AI tabs open right now. You switch between them. You lose context. You re-type the same thing in three different chat windows.
+You've been using AI as a free user — you type a prompt, the token limit hits, so you switch to another account and start over. Same loop, over and over, never actually finishing the work.
 
-**Kazu fixes that.**
+**I built Kazu to fix that.**
 
-It's a desktop app that tiles your AI chats — Claude, ChatGPT, Gemini, Perplexity, DeepSeek, or any website — side by side in one window. Each chat lives in its own private bubble, stays logged in, and never touches another. You stay in flow.
+Kazu is a desktop interface where you open multiple panes — one per account, one per AI — all in a single window. Split your task equally across each pane, work them all at once, and finish in a fraction of the time. No more tab-switching. No more losing context. No more worrying about token limits.
 
 > **Your passwords are always safe.** You sign in directly on each AI's website, exactly as you would in a normal browser. Kazu never sees your credentials — ever.
 
@@ -37,38 +37,55 @@ Go to [**Releases →**](https://github.com/Goutham-K-278/KAZU/releases/latest) 
 
 | Platform | Installer | How to install |
 |---|---|---|
-| **Windows 10 / 11** | `Kazu-Setup-*-Windows-x64.exe` | Double-click. No admin rights needed. Kazu appears in your Start Menu and Desktop. |
-| **macOS 12+** | `Kazu-*-macOS.dmg` | Open the `.dmg` and drag Kazu into your Applications folder. |
-| **Ubuntu / Debian** | `kazu_*_amd64.deb` | `sudo apt install ./kazu_*_amd64.deb` — Kazu appears in your Applications menu. |
+| **Windows 10 / 11** | `Kazu-Setup-*-Windows-x64.exe` | Double-click. No admin rights needed. Appears in Start Menu and Desktop. |
+| **macOS 12+** | `Kazu-*-macOS.dmg` | Open the `.dmg`, drag Kazu into Applications. Done. |
+| **Ubuntu / Debian** | `kazu_*_amd64.deb` | `sudo apt install ./kazu_*_amd64.deb` — appears in your Applications menu. |
 
 ---
 
 ## Why Kazu?
 
-### One window for all your AI tools
-Stop alt-tabbing between six browser tabs. See Claude and ChatGPT side by side, compare their answers instantly, and copy the best one.
+### 🪟 One window for all your AI tools
+- See Claude, ChatGPT, Gemini side by side — no more alt-tabbing
+- Compare answers instantly across panes
+- 1–4 pane layouts with draggable splitters
 
-### Every AI stays logged in — always
-Each pane has its own private session. Claude is logged into your work account, ChatGPT into your personal one, Gemini into your Google account — all at the same time, never interfering with each other.
+### 🔐 Every AI stays logged in — always
+- Each pane has its own completely private session
+- Multiple accounts in multiple panes, all at once
+- Nothing leaks between panes — ever
 
-### Spaces — like virtual desktops for your AI work
-Group your panes into **Spaces**: a "Research" space with four panes, a "Coding" space with two, a "Writing" space with one. Switch between them in one click. Activity dots light up on the tab so you always know when a reply comes in — even in a background Space.
+### 🗂 Spaces — virtual desktops for your AI work
+- Group panes into named Spaces: "Research", "Coding", "Writing"
+- Switch Spaces in one click
+- Activity dots on tabs light up when a background reply comes in
 
-### Smart memory — Kazu only uses RAM when it needs to
-Background Spaces quietly freeze, then hibernate, then fully unload from memory — but only after your current AI replies finish streaming. When you switch back, panes wake up with a smooth "Waking up…" preview. Pin any pane to keep it always live.
+### 🧠 Smart memory — uses RAM only when needed
+- Background Spaces freeze → hibernate → unload automatically
+- Streams always finish before anything hibernates
+- "Waking up…" preview when you switch back
+- Pin any pane to keep it always live
 
-### Gemini and Google accounts — it just works
-Google blocks embedded browsers. Kazu detects this and opens Gemini in **Companion Mode**: your real Chrome, Edge, or Brave browser in a clean, bar-free window that auto-tiles with everything else. No workarounds needed.
+### ✨ Gemini & Google accounts — it just works
+- Kazu detects when Google blocks an embedded browser
+- Opens Gemini in **Companion Mode**: your real Chrome/Edge/Brave, bar-free, auto-tiled
+- Zero manual workarounds
 
-### Keyboard-first, focus-friendly
-- **`Ctrl+K`** — Command palette: jump anywhere, open any site, change any setting
-- **`Ctrl+Shift+T`** — Undo a closed pane (for 5 seconds, like a browser tab)
-- **`Ctrl+Shift+B`** — Draft Composer: write once, send to all panes at once
-- **Focus Mode** — maximise one pane to full window, one keystroke away
-- **Pass-Through Mode** — stop Kazu from capturing shortcuts so the site's own hotkeys work
+### ⌨️ Keyboard-first
+| Shortcut | What it does |
+|---|---|
+| `Ctrl+K` | Command palette — jump anywhere, open any site |
+| `Ctrl+Shift+T` | Undo a closed pane (5-second window) |
+| `Ctrl+Shift+B` | Draft Composer — write once, send to all panes |
+| `Ctrl+W` | Focus mode — maximise one pane |
+| Pass-Through Mode | Let site shortcuts reach the site, not Kazu |
 
-### Downloads, themes, crash recovery — the quiet details
-Kazu handles file downloads with progress toasts and auto-numbered filenames. It recovers your window if you unplug a monitor. It shows real RAM usage, not just the number your OS sees. Crash, offline, and sign-out states are shown per-pane — one broken site doesn't affect the rest.
+### 🛡 Quiet details that matter
+- Crash / offline / sign-out shown **per pane** — one broken site doesn't touch the rest
+- File downloads with progress toasts and auto-numbered filenames
+- Window auto-recovers if you unplug a monitor
+- Real RAM usage, not the number your OS guesses
+- Light, dark, and system themes — no white flash on startup
 
 ---
 
@@ -130,6 +147,16 @@ Kazu handles file downloads with progress toasts and auto-numbered filenames. It
 
 ---
 
+## Supported AI Services
+
+Kazu works with any website. Ships with ready-made presets for:
+
+**Claude · ChatGPT · Gemini · Perplexity · DeepSeek · Mistral · Grok · Copilot**
+
+And any custom URL — Notion, GitHub, Ollama running locally, your company's internal tools.
+
+---
+
 ## Install from Source
 
 Requires **Python 3.11+** and [uv](https://docs.astral.sh/uv/).
@@ -149,13 +176,13 @@ uv run python scripts/install_desktop_entry.py
 uv run kazu
 ```
 
-### Run the test suite
+**Run the test suite**
 
 ```bash
 uv run pytest
 ```
 
-### Publish a release (maintainers)
+**Publish a release (maintainers)**
 
 Push a version tag — GitHub Actions builds and attaches the Windows `.exe`, macOS `.dmg`, and Linux `.deb` installers automatically:
 
@@ -163,16 +190,6 @@ Push a version tag — GitHub Actions builds and attaches the Windows `.exe`, ma
 git tag v0.1.0
 git push origin v0.1.0
 ```
-
----
-
-## Supported AI Services
-
-Kazu works with any website. It ships with ready-made presets for:
-
-**Claude · ChatGPT · Gemini · Perplexity · DeepSeek · Mistral · Grok · Copilot**
-
-And any custom URL — Notion, GitHub, Ollama running locally, your company's internal tools.
 
 ---
 
