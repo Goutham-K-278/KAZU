@@ -67,7 +67,9 @@ class AccountPicker(QFrame):
                 label = f"{preset.name}\n({preset.badge_hint})"
             btn = QPushButton(label)
             btn.setMinimumHeight(46)
-            btn.clicked.connect(lambda _=False, key=preset.key: self._on_pick_new_provider(key, None))
+            btn.clicked.connect(  # noqa: E501
+                lambda _=False, key=preset.key: self._on_pick_new_provider(key, None)
+            )
             grid.addWidget(btn, row, col)
             col += 1
             if col >= 3:
@@ -95,7 +97,7 @@ class AccountPicker(QFrame):
                 suffix = f" — Open in {locs[0][0].name}" if locs else ""
                 btn = QPushButton(f"{account.label}{suffix}")
                 btn.clicked.connect(
-                    lambda _=False, acc=account, opened=bool(locs): self._handle_existing(acc, opened)
+                    lambda _=False, acc=account, opened=bool(locs): self._handle_existing(acc, opened)  # noqa: E501
                 )
                 layout.addWidget(btn)
 

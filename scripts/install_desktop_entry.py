@@ -14,11 +14,11 @@ Works out of the box for users who clone from GitHub and run:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import stat
 import subprocess
 import sys
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ICONS_DIR = REPO_ROOT / "packaging" / "icons"
@@ -69,7 +69,7 @@ def _install_windows() -> Path:
         "$sc.Save()"
     )
     subprocess.run(  # noqa: S603
-        ["powershell", "-NoProfile", "-Command", ps_script],
+        ["powershell", "-NoProfile", "-Command", ps_script],  # noqa: S607
         check=True,
     )
     return shortcut_path
@@ -126,7 +126,10 @@ def _install_macos(target_exe: Path) -> Path:
     )
 
     launcher = macos_dir / "kazu-launcher"
-    exec_line = f'exec "{target_exe}"' if target_exe.name == "kazu" else f'exec "{target_exe}" -m kazu'
+    if target_exe.name == "kazu":
+        exec_line = f'exec "{target_exe}"'
+    else:
+        exec_line = f'exec "{target_exe}" -m kazu'
     launcher.write_text(f"#!/bin/sh\n{exec_line}\n", encoding="utf-8")
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return app_bundle

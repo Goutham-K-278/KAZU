@@ -5,8 +5,8 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from kazu.domain.providers import ProviderPresetRegistry
 from kazu.infra.db import Database
@@ -43,11 +43,11 @@ def _configure_windows_taskbar_id() -> None:
     """Ensure Windows pins and taskbar show Kazu's own icon instead of python.exe."""
     if sys.platform != "win32":
         return
-    try:
+    try:  # noqa: SIM105
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
             WINDOWS_APP_USER_MODEL_ID
         )
-    except (AttributeError, OSError):
+    except (AttributeError, OSError):  # noqa: S110
         pass
 
 

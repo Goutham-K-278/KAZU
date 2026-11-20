@@ -209,9 +209,8 @@ class MainWindow(QMainWindow):
         if target is None:
             return
 
-        if self._settings.confirm_delete_space:
-            if not self._confirm_delete_space_dialog(target.name):
-                return
+        if self._settings.confirm_delete_space and not self._confirm_delete_space_dialog(target.name):  # noqa: E501
+            return
 
         # Determine which Space to focus next if deleting the active Space.
         next_space_id = self._active_space_id

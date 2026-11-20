@@ -107,7 +107,7 @@ class PaneFrame(QFrame):
         # Inline FindBar (hidden until Ctrl+F)
         self._find_bar = FindBar(
             on_search=self._handle_find,
-            on_close=self.focus_input,
+            on_close=self._close_find_bar,
             parent=self,
         )
         root.addWidget(self._find_bar)
@@ -209,6 +209,10 @@ class PaneFrame(QFrame):
         if self._engine is not None and hasattr(self._engine, "find_text"):
             self._engine.find_text(query)
 
+    def _close_find_bar(self) -> None:
+        """Close the find bar and return focus to the pane content."""
+        self.focus_input()
+
     def _handle_pin_toggled(self, checked: bool) -> None:
         self._pin_btn.setText("📌" if checked else "○")
         if self._on_toggle_keep_running is not None:
@@ -249,11 +253,19 @@ class PaneFrame(QFrame):
 
         menu.addSeparator()
         if self._on_split is not None:
-            menu.addAction("Split Right", lambda: self._on_split(self.pane_id, Orientation.HORIZONTAL))
-            menu.addAction("Split Down", lambda: self._on_split(self.pane_id, Orientation.VERTICAL))
+            split_fn = self._on_split
+            menu.addAction(
+                "Split Right",
+                lambda: split_fn(self.pane_id, Orientation.HORIZONTAL),
+            )
+            menu.addAction(
+                "Split Down",
+                lambda: split_fn(self.pane_id, Orientation.VERTICAL),
+            )
         menu.addSeparator()
         if self._on_close is not None:
-            menu.addAction("Close Pane", lambda: self._on_close(self.pane_id))
+            close_fn = self._on_close
+            menu.addAction("Close Pane", lambda: close_fn(self.pane_id))
         menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
 
     def _handle_rename_account(self) -> None:

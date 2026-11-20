@@ -7,9 +7,9 @@ any record is written to disk.
 from __future__ import annotations
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-import re
 
 MAX_LOG_BYTES: int = 2 * 1024 * 1024  # 2 MB per file
 BACKUP_COUNT: int = 3

@@ -7,13 +7,13 @@ never spoofs user agents.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import os
-from pathlib import Path
 import platform
 import shutil
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from kazu.controllers.lifecycle import LifecycleTier

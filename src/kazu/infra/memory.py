@@ -6,8 +6,8 @@ renderers so memory diagnostics and soft RAM warnings report the truth.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 BYTES_PER_MB: float = 1024.0 * 1024.0
 DEFAULT_SOFT_WARNING_MB: float = 2048.0

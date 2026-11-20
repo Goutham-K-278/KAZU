@@ -6,10 +6,10 @@ headlessly and reused across engines.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
 import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
 
 # Eight color-blind-safe Okabe-Ito-inspired palette keys for account dots.
 ACCOUNT_COLOR_KEYS: tuple[str, ...] = (
@@ -29,21 +29,21 @@ MAX_ZOOM: float = 2.0
 LAYOUT_SCHEMA_VERSION: int = 1
 
 
-class EngineKind(str, Enum):
+class EngineKind(StrEnum):
     """Supported pane rendering backends."""
 
     EMBEDDED = "embedded"
     COMPANION = "companion"
 
 
-class Orientation(str, Enum):
+class Orientation(StrEnum):
     """Split direction for a layout container."""
 
     HORIZONTAL = "horizontal"
     VERTICAL = "vertical"
 
 
-class ThemeMode(str, Enum):
+class ThemeMode(StrEnum):
     """User-selectable visual theme mode."""
 
     SYSTEM = "system"
@@ -51,14 +51,14 @@ class ThemeMode(str, Enum):
     DARK = "dark"
 
 
-class DensityMode(str, Enum):
+class DensityMode(StrEnum):
     """UI spacing density preference."""
 
     COMFORTABLE = "comfortable"
     COMPACT = "compact"
 
 
-class ZoomMode(str, Enum):
+class ZoomMode(StrEnum):
     """Narrow-pane zoom strategy."""
 
     FIT_DESKTOP = "fit_desktop"
@@ -67,7 +67,7 @@ class ZoomMode(str, Enum):
 
 def utc_now_iso() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def new_id() -> str:

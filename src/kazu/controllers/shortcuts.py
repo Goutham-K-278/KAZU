@@ -50,7 +50,9 @@ class ShortcutRegistry:
         self.bindings[action] = sequence.strip()
         return True
 
-    def should_intercept(self, action: str, *, active_provider_quirks: tuple[str, ...] = ()) -> bool:
+    def should_intercept(
+        self, action: str, *, active_provider_quirks: tuple[str, ...] = ()
+    ) -> bool:
         """Return False when Pass-Through Mode is active or the site claims this combo."""
         if self.pass_through_mode:
             return False

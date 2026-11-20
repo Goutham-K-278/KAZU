@@ -10,9 +10,9 @@ Companion Mode launch) so you can execute T1–T14 and fill docs/phase0-findings
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 from kazu.domain.models import Account, EngineKind
 from kazu.infra.memory import MemoryMonitor

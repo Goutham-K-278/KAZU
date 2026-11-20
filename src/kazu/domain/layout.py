@@ -6,8 +6,8 @@ and PaneNode objects, serializing safely to/from versioned JSON.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from kazu.domain.models import LAYOUT_SCHEMA_VERSION, Orientation, new_id
@@ -245,7 +245,9 @@ def split_pane(
                 sizes=[0.5, 0.5],
             )
         new_children = [_transform(child) for child in node.children]
-        return SplitNode(orientation=node.orientation, children=new_children, sizes=list(node.sizes))
+        return SplitNode(  # noqa: E501
+            orientation=node.orientation, children=new_children, sizes=list(node.sizes)
+        )
 
     updated = _transform(root)
     return updated, (created[0] if created else None)

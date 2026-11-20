@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import platform
 from dataclasses import dataclass
 from datetime import date
-import platform
 
 ENGINE_STALE_DAYS: int = 60
 

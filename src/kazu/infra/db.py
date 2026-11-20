@@ -6,11 +6,11 @@ directly — controllers mediate all reads and writes.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict
-import json
 from pathlib import Path
-import sqlite3
 from typing import Any
 
 from kazu.domain.models import (
@@ -207,19 +207,19 @@ class Database:
 
         defaults = AppSettings()
         return AppSettings(
-            restore_last_session=bool(raw.get("restore_last_session", defaults.restore_last_session)),
+            restore_last_session=bool(raw.get("restore_last_session", defaults.restore_last_session)),  # noqa: E501
             launch_on_login=bool(raw.get("launch_on_login", defaults.launch_on_login)),
             close_to_tray=bool(raw.get("close_to_tray", defaults.close_to_tray)),
-            confirm_delete_space=bool(raw.get("confirm_delete_space", defaults.confirm_delete_space)),
+            confirm_delete_space=bool(raw.get("confirm_delete_space", defaults.confirm_delete_space)),  # noqa: E501
             theme=_safe_enum(ThemeMode, raw.get("theme"), defaults.theme),
             density=_safe_enum(DensityMode, raw.get("density"), defaults.density),
             accent_color=str(raw.get("accent_color", defaults.accent_color)),
             zoom_mode=_safe_enum(ZoomMode, raw.get("zoom_mode"), defaults.zoom_mode),
-            freeze_after_minutes=int(raw.get("freeze_after_minutes", defaults.freeze_after_minutes)),
-            discard_after_minutes=int(raw.get("discard_after_minutes", defaults.discard_after_minutes)),
-            show_memory_per_pane=bool(raw.get("show_memory_per_pane", defaults.show_memory_per_pane)),
+            freeze_after_minutes=int(raw.get("freeze_after_minutes", defaults.freeze_after_minutes)),  # noqa: E501
+            discard_after_minutes=int(raw.get("discard_after_minutes", defaults.discard_after_minutes)),  # noqa: E501
+            show_memory_per_pane=bool(raw.get("show_memory_per_pane", defaults.show_memory_per_pane)),  # noqa: E501
             pass_through_mode=bool(raw.get("pass_through_mode", defaults.pass_through_mode)),
-            onboarding_completed=bool(raw.get("onboarding_completed", defaults.onboarding_completed)),
+            onboarding_completed=bool(raw.get("onboarding_completed", defaults.onboarding_completed)),  # noqa: E501
             sync_folder=str(raw.get("sync_folder", defaults.sync_folder)),
             download_dir=str(raw.get("download_dir", defaults.download_dir)),
             last_space_id=str(raw.get("last_space_id", defaults.last_space_id)),

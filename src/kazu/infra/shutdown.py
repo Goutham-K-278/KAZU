@@ -7,8 +7,8 @@ preventing lost cookies or profile corruption on quit.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 
 logger = logging.getLogger("kazu.shutdown")
 

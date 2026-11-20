@@ -6,8 +6,8 @@ simultaneously. A second launch signals the running instance to focus itself.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 
 logger = logging.getLogger("kazu.single_instance")
 

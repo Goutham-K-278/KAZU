@@ -12,8 +12,8 @@ Implements:
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QBuffer, QIODevice, QUrl
@@ -101,7 +101,7 @@ class AgentPage(QWebEnginePage):
         # Harden page settings: no local file access, no QWebChannel bridge.
         settings = self.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)  # noqa: E501
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
 
         # Problem A4: native FIDO2 / WebAuthn dialog.
@@ -259,15 +259,13 @@ class QtWebEnginePane:
     def _handle_title_changed(self, title: str) -> None:
         self._emit_activity()
         current_url = self._page.url().toString()
-        if self._block_detector.is_google_blocked(current_url, title):
-            if self._on_google_blocked is not None:
-                self._on_google_blocked()
+        if self._block_detector.is_google_blocked(current_url, title) and self._on_google_blocked is not None:  # noqa: E501
+            self._on_google_blocked()
 
     def _handle_url_changed(self, qurl: QUrl) -> None:
         url_str = qurl.toString()
-        if self._block_detector.is_google_blocked(url_str, self._page.title()):
-            if self._on_google_blocked is not None:
-                self._on_google_blocked()
+        if self._block_detector.is_google_blocked(url_str, self._page.title()) and self._on_google_blocked is not None:  # noqa: E501
+            self._on_google_blocked()
         if self._on_signed_out_changed is not None:
             self._on_signed_out_changed(
                 self._block_detector.is_signed_out_url(url_str, self._preset)

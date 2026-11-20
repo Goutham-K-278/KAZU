@@ -6,8 +6,8 @@ companion), allowed in-pane domains, login path hints, and target CSS widths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from kazu.domain.models import EngineKind
@@ -206,7 +206,8 @@ def _parse_preset_dict(key: str, data: dict[str, Any]) -> ProviderPreset | None:
         pane_type = EngineKind.EMBEDDED
 
     raw_width = data.get("target_css_width", DEFAULT_TARGET_CSS_WIDTH)
-    target_width = int(raw_width) if isinstance(raw_width, (int, float)) else DEFAULT_TARGET_CSS_WIDTH
+    is_numeric = isinstance(raw_width, (int, float))
+    target_width = int(raw_width) if is_numeric else DEFAULT_TARGET_CSS_WIDTH
     target_width = max(500, min(1600, target_width))
 
     return ProviderPreset(

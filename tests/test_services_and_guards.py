@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
 import logging
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from datetime import date
+from pathlib import Path
 
 from kazu.controllers.autofit import AutoFitZoomService
 from kazu.controllers.lifecycle import LifecycleTier, TieredLifecycleService
@@ -149,7 +149,9 @@ class ServicesAndGuardsTests(unittest.TestCase):
     def test_shortcuts_pass_through_and_provider_conflicts(self) -> None:
         reg = ShortcutRegistry.default()
         self.assertTrue(reg.should_intercept("command_palette"))
-        self.assertFalse(reg.should_intercept("command_palette", active_provider_quirks=("uses_ctrl_k",)))
+        self.assertFalse(  # noqa: E501
+            reg.should_intercept("command_palette", active_provider_quirks=("uses_ctrl_k",))
+        )
         reg.pass_through_mode = True
         self.assertFalse(reg.should_intercept("new_space"))
 

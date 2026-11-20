@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -15,7 +15,7 @@ GOOGLE_BLOCK_MARKERS: tuple[str, ...] = (
 )
 
 
-class NavigationAction(str, Enum):
+class NavigationAction(StrEnum):
     """Decision for a navigation request inside an embedded pane."""
 
     ALLOW_IN_PANE = "allow_in_pane"

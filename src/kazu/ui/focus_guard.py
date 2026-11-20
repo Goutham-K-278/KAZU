@@ -15,7 +15,9 @@ from PySide6.QtCore import QObject, QTimer
 class FocusGuard(QObject):
     """Defers focus restoration by one event-loop tick so Qt finishes tab activation."""
 
-    def __init__(self, focus_active_pane: Callable[[], bool], parent: QObject | None = None) -> None:
+    def __init__(  # noqa: E501
+        self, focus_active_pane: Callable[[], bool], parent: QObject | None = None
+    ) -> None:
         super().__init__(parent)
         self._focus_active_pane = focus_active_pane
 

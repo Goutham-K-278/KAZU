@@ -1,10 +1,9 @@
-"""Slim 36px top bar hosting Space tabs (with right-side delete '×'), New Space, Palette, and Settings."""
+"""Top bar: Space tabs with delete button, New Space, Command Palette, and Settings."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -75,8 +74,9 @@ class TopBar(QFrame):
         unread = unread_space_ids or set()
         while self._tabs_layout.count():
             item = self._tabs_layout.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.deleteLater()
         self._tab_groups.clear()
 
         can_delete = len(spaces) > 1

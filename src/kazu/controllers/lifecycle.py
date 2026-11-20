@@ -11,12 +11,12 @@ Pinned ('Keep Running') panes never transition past HIDDEN_ACTIVE.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 
 
-class LifecycleTier(str, Enum):
+class LifecycleTier(StrEnum):
     """Four-tier lifecycle state for an embedded pane."""
 
     LIVE = "live"
