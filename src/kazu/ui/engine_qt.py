@@ -122,8 +122,22 @@ class AgentPage(QWebEnginePage):
         nav_type: QWebEnginePage.NavigationType,
         is_main_frame: bool,
     ) -> bool:
+        # Always allow sub-frame navigations (ads, iframes, etc.).
         if not is_main_frame:
             return True
+
+        scheme = url.scheme().lower()
+
+        # Allow blob: URLs — Claude and other sites use these for file downloads.
+        # Qt intercepts blob: navigations that have a Content-Disposition and fires
+        # downloadRequested on the profile; blocking them here prevents that signal.
+        if scheme == "blob":
+            return True
+
+        # Block everything that is not http/https (data:, javascript:, file:, etc.).
+        if scheme not in ("https", "http"):
+            return False
+
         decision = self._nav_policy.decide(
             url=url.toString(),
             preset=self._preset,
