@@ -8,17 +8,20 @@ Implements:
 - Native WebAuthnDialog hook for FIDO2 keys (Problem A4)
 - Crash recovery, BlockDetector, and Activity Guard signals
 - Zero QWebChannel exposure and disabled file-URL access
+- Download interception via downloadRequested so files actually save to disk
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QBuffer, QIODevice, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWebEngineCore import (
+    QWebEngineDownloadRequest,
     QWebEnginePage,
     QWebEngineProfile,
     QWebEngineSettings,
@@ -26,7 +29,12 @@ from PySide6.QtWebEngineCore import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from kazu.controllers.lifecycle import LifecycleTier
-from kazu.controllers.navigation import BlockDetector, NavigationAction, NavigationPolicy
+from kazu.controllers.navigation import (
+    BlockDetector,
+    DownloadService,
+    NavigationAction,
+    NavigationPolicy,
+)
 from kazu.domain.models import Account
 from kazu.domain.providers import ProviderPreset, ProviderPresetRegistry
 from kazu.infra.paths import AppPaths
@@ -285,6 +293,8 @@ class QtWebEngineFactory:
         paths: AppPaths,
         bg_hex: str = "#0F0F10",
         presets: ProviderPresetRegistry | None = None,
+        download_dir: str = "",
+        on_download_started: Callable[[str, str], None] | None = None,
     ) -> None:
         self._paths = paths
         self._bg_hex = bg_hex
@@ -292,16 +302,48 @@ class QtWebEngineFactory:
         self._nav_policy = NavigationPolicy()
         self._block_detector = BlockDetector()
         self._profiles: dict[str, QWebEngineProfile] = {}
+        self._download_service = DownloadService()
+        self._download_dir = download_dir
+        self._on_download_started = on_download_started
 
     def set_background_hex(self, bg_hex: str) -> None:
         self._bg_hex = bg_hex
+
+    def set_download_dir(self, download_dir: str) -> None:
+        self._download_dir = download_dir
 
     def get_or_create_profile(self, account_id: str) -> QWebEngineProfile:
         profile = self._profiles.get(account_id)
         if profile is None:
             profile = _build_persistent_profile(account_id, self._paths)
+            # Wire download interception once per profile.
+            profile.downloadRequested.connect(self._handle_download)
             self._profiles[account_id] = profile
         return profile
+
+    def _handle_download(self, download: QWebEngineDownloadRequest) -> None:
+        """Accept a download, place it in the configured download dir, and notify the UI."""
+        suggested = download.suggestedFileName() or "download"
+
+        # Resolve the target directory: user-configured > OS Downloads folder.
+        if self._download_dir:
+            target_dir = Path(self._download_dir).expanduser()
+        else:
+            target_dir = Path.home() / "Downloads"
+
+        try:
+            dest = self._download_service.resolve_unique_path(target_dir, suggested)
+        except (ValueError, OSError):
+            logger.warning("Download path resolution failed for %r; using fallback.", suggested)
+            dest = target_dir / suggested
+
+        download.setDownloadDirectory(str(dest.parent))
+        download.setDownloadFileName(dest.name)
+        download.accept()
+
+        logger.info("Download accepted: %s", dest)
+        if self._on_download_started is not None:
+            self._on_download_started(dest.name, str(dest.parent))
 
     def create_pane(
         self,

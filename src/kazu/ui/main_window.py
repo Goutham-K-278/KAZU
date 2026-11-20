@@ -146,9 +146,10 @@ class MainWindow(QMainWindow):
                 paths=self._paths,
                 bg_hex=self._tokens.bg,
                 presets=self._presets,
+                download_dir=self._settings.download_dir,
+                on_download_started=self._handle_download_started,
             )
         return self._qt_engine_factory
-
     def _bootstrap_workspace(self) -> None:
         if not self._settings.onboarding_completed:
             dialog = OnboardingDialog(window_width_px=self.width(), parent=self)
@@ -508,6 +509,16 @@ class MainWindow(QMainWindow):
             self._db.save_settings(self._settings)
             self._shortcuts.pass_through_mode = self._settings.pass_through_mode
             self._apply_theme()
+            # Propagate updated download directory to the factory if it exists.
+            if self._qt_engine_factory is not None:
+                self._qt_engine_factory.set_download_dir(self._settings.download_dir)
+
+    def _handle_download_started(self, filename: str, folder: str) -> None:
+        """Show a toast when a file download is accepted and saved to disk."""
+        self._toast.show_message(
+            f'Downloading "{filename}" to {folder}',
+            duration_ms=7000,
+        )
 
     def _apply_theme(self) -> None:
         if self._settings.theme == ThemeMode.LIGHT:
