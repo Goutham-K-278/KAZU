@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QBuffer, QIODevice, QUrl
+from PySide6.QtCore import QBuffer, QIODevice, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWebEngineCore import (
     QWebEngineDownloadRequest,
@@ -157,18 +157,37 @@ class AgentPage(QWebEnginePage):
         popup_view.setPage(popup_page)
 
         dialog = OAuthPopup(web_view=popup_view, parent=self.parent())
-        popup_page.urlChanged.connect(lambda qurl: dialog.set_display_url(qurl.toString()))
+
+        # Track whether this popup visited an auth/OAuth domain so we know
+        # whether to reload the main pane when it closes.
+        visited_auth_domain: list[bool] = [False]
+
+        def _on_url_changed(qurl: QUrl) -> None:
+            dialog.set_display_url(qurl.toString())
+            host = (qurl.host() or "").lower()
+            from kazu.controllers.navigation import OAUTH_PASSTHROUGH_DOMAINS
+            for auth_domain in OAUTH_PASSTHROUGH_DOMAINS:
+                if host == auth_domain or host.endswith(f".{auth_domain}"):
+                    visited_auth_domain[0] = True
+                    return
+
+        popup_page.urlChanged.connect(_on_url_changed)
         popup_page.windowCloseRequested.connect(dialog.close)
-        dialog.finished.connect(lambda _: self._cleanup_popup(dialog))
+        dialog.finished.connect(lambda _: self._cleanup_popup(dialog, visited_auth_domain))
 
         self._popups.append(dialog)
         dialog.show()
         return popup_page
 
-    def _cleanup_popup(self, dialog: OAuthPopup) -> None:
+    def _cleanup_popup(self, dialog: OAuthPopup, visited_auth: list[bool] | None = None) -> None:
         if dialog in self._popups:
             self._popups.remove(dialog)
+        did_oauth = visited_auth is not None and visited_auth[0]
         dialog.deleteLater()
+        # Reload the main pane so it picks up the session cookie set during OAuth.
+        # 400 ms delay lets the browser commit any pending cookie writes first.
+        if did_oauth:
+            QTimer.singleShot(400, lambda: self.triggerAction(QWebEnginePage.WebAction.Reload))
 
     def _handle_webauthn_request(self, request: Any) -> None:
         dialog = WebAuthnDialog(request=request, parent=self.parent())
