@@ -10,6 +10,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMenu,
     QPushButton,
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from kazu.controllers.autofit import AutoFitZoomService
-from kazu.domain.models import Account, Orientation, ZoomMode
+from kazu.domain.models import Account, EngineKind, Orientation, ZoomMode
 from kazu.ui.block_card import build_crash_card, build_google_block_card
 from kazu.ui.find_bar import FindBar
 from kazu.ui.theme.tokens import ACCOUNT_DOT_HEX
@@ -39,6 +40,9 @@ class PaneFrame(QFrame):
         on_split: Callable[[str, Orientation], None] | None = None,
         on_close: Callable[[str], None] | None = None,
         on_toggle_keep_running: Callable[[str, bool], None] | None = None,
+        on_switch_engine: Callable[[str, EngineKind], None] | None = None,
+        on_rename_account: Callable[[str, str], None] | None = None,
+        # Keep old name for backwards compat — wired to on_switch_engine(COMPANION)
         on_switch_companion: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -52,6 +56,9 @@ class PaneFrame(QFrame):
         self._on_split = on_split
         self._on_close = on_close
         self._on_toggle_keep_running = on_toggle_keep_running
+        self._on_rename_account = on_rename_account
+        self._on_switch_engine = on_switch_engine
+        # Legacy compat: wrap old-style on_switch_companion
         self._on_switch_companion = on_switch_companion
         self._engine: Any = None
 
@@ -147,9 +154,7 @@ class PaneFrame(QFrame):
     def show_google_block_card(self) -> None:
         card = build_google_block_card(
             on_use_email=self.reload,
-            on_switch_companion=lambda: (
-                self._on_switch_companion(self.pane_id) if self._on_switch_companion else None
-            ),
+            on_switch_companion=lambda: self._request_switch_engine(EngineKind.COMPANION),
             parent=self,
         )
         idx = self._stack.addWidget(card)
@@ -209,6 +214,13 @@ class PaneFrame(QFrame):
         if self._on_toggle_keep_running is not None:
             self._on_toggle_keep_running(self.pane_id, checked)
 
+    def _request_switch_engine(self, target: EngineKind) -> None:
+        """Route engine-switch requests through on_switch_engine or legacy on_switch_companion."""
+        if self._on_switch_engine is not None:
+            self._on_switch_engine(self.pane_id, target)
+        elif target == EngineKind.COMPANION and self._on_switch_companion is not None:
+            self._on_switch_companion(self.pane_id)
+
     def _open_menu(self) -> None:
         menu = QMenu(self)
         menu.addAction("Reload", self.reload)
@@ -217,12 +229,43 @@ class PaneFrame(QFrame):
             menu.addAction("Forward", self._engine.forward)
         menu.addAction("Find in page", self.open_find_bar)
         menu.addSeparator()
+
+        # Rename pane / account label
+        if self.account is not None and self._on_rename_account is not None:
+            menu.addAction("Rename pane...", self._handle_rename_account)
+
+        # Engine-switch: show the opposite of whatever mode this pane is in
+        if self.account is not None:
+            if self.account.engine == EngineKind.COMPANION:
+                menu.addAction(
+                    "Switch to Embedded Mode",
+                    lambda: self._request_switch_engine(EngineKind.EMBEDDED),
+                )
+            else:
+                menu.addAction(
+                    "Open in Companion Mode",
+                    lambda: self._request_switch_engine(EngineKind.COMPANION),
+                )
+
+        menu.addSeparator()
         if self._on_split is not None:
             menu.addAction("Split Right", lambda: self._on_split(self.pane_id, Orientation.HORIZONTAL))
             menu.addAction("Split Down", lambda: self._on_split(self.pane_id, Orientation.VERTICAL))
-        if self._on_switch_companion is not None and self.account is not None:
-            menu.addAction("Open in Companion Mode", lambda: self._on_switch_companion(self.pane_id))
         menu.addSeparator()
         if self._on_close is not None:
             menu.addAction("Close Pane", lambda: self._on_close(self.pane_id))
         menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
+
+    def _handle_rename_account(self) -> None:
+        """Prompt the user for a new label and call on_rename_account."""
+        if self.account is None or self._on_rename_account is None:
+            return
+        new_label, ok = QInputDialog.getText(
+            self,
+            "Rename Pane",
+            "Enter a new name for this pane:",
+            text=self.account.label,
+        )
+        if ok and new_label.strip():
+            self._on_rename_account(self.account.id, new_label.strip())
+            self._title_label.setText(new_label.strip())

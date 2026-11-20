@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QPushButton,
+    QWidget,
+)
 
 from kazu.domain.models import Space
 
@@ -19,13 +26,16 @@ class TopBar(QFrame):
         on_new_space: Callable[[], None],
         on_open_palette: Callable[[], None],
         on_open_settings: Callable[[], None],
+        on_rename_space: Callable[[str, str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
         self._on_select_space = on_select_space
         self._on_delete_space = on_delete_space
+        self._on_rename_space = on_rename_space
         self._tab_groups: dict[str, QFrame] = {}
+        self._spaces: list[Space] = []
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(8, 0, 8, 0)
@@ -61,6 +71,7 @@ class TopBar(QFrame):
         active_space_id: str,
         unread_space_ids: set[str] | None = None,
     ) -> None:
+        self._spaces = spaces
         unread = unread_space_ids or set()
         while self._tabs_layout.count():
             item = self._tabs_layout.takeAt(0)
@@ -84,7 +95,12 @@ class TopBar(QFrame):
             tab_btn = QPushButton(f"{dot}{space.name}")
             tab_btn.setObjectName("SpaceTab")
             tab_btn.setProperty("active", "true" if is_active else "false")
+            tab_btn.setToolTip("Double-click to rename")
             tab_btn.clicked.connect(lambda _=False, sid=space.id: self._on_select_space(sid))
+            # Double-click on the tab button triggers rename
+            tab_btn.mouseDoubleClickEvent = (  # type: ignore[method-assign]
+                lambda event, sid=space.id, sname=space.name: self._handle_rename(sid, sname)
+            )
             group_layout.addWidget(tab_btn)
 
             if can_delete:
@@ -100,3 +116,16 @@ class TopBar(QFrame):
 
             self._tabs_layout.addWidget(group)
             self._tab_groups[space.id] = group
+
+    def _handle_rename(self, space_id: str, current_name: str) -> None:
+        """Prompt the user inline for a new Space name."""
+        if self._on_rename_space is None:
+            return
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Space",
+            "Enter a new name for this workspace:",
+            text=current_name,
+        )
+        if ok and new_name.strip():
+            self._on_rename_space(space_id, new_name.strip())

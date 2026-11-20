@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
             on_new_space=self.create_new_space,
             on_open_palette=self.open_command_palette,
             on_open_settings=self.open_settings,
+            on_rename_space=self._handle_rename_space,
         )
         self._stack = SpaceStack(on_layout_resized=self._handle_layout_resized)
         self._draft_composer = DraftComposer(
@@ -271,7 +272,8 @@ class MainWindow(QMainWindow):
             on_split=self._handle_split_pane,
             on_close=self._handle_close_pane,
             on_toggle_keep_running=self._handle_toggle_keep_running,
-            on_switch_companion=self._handle_switch_companion,
+            on_switch_engine=self._switch_pane_engine,
+            on_rename_account=self._handle_rename_account,
         )
         frame.set_header_visible(not self._focus_mode)
 
@@ -336,6 +338,17 @@ class MainWindow(QMainWindow):
             return
         self._accounts.switch_engine(frame.account.id, engine)
         self._rebuild_active_space()
+
+    def _handle_rename_space(self, space_id: str, new_name: str) -> None:
+        """Persist the new Space name and refresh the top bar."""
+        updated = self._spaces.rename_space(space_id, new_name)
+        if updated is not None:
+            self._refresh_top_bar()
+            self._toast.show_message(f'Renamed Space to "{updated.name}".')
+
+    def _handle_rename_account(self, account_id: str, new_label: str) -> None:
+        """Persist the new account label; the pane header is already updated optimistically."""
+        self._accounts.rename_account(account_id, new_label)
 
     def _handle_switch_companion(self, pane_id: str) -> None:
         self._switch_pane_engine(pane_id, EngineKind.COMPANION)
