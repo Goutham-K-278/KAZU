@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>All your AI chats. One calm window.</strong><br/>
-  Run Claude, ChatGPT, Gemini, Perplexity and more — side by side, each in its own private session.
+  Run Claude, ChatGPT, Gemini, Perplexity and more, side by side, each in its own private session.
 </p>
 
 <p align="center">
@@ -21,13 +21,13 @@
 
 ## What is Kazu?
 
-You've been using AI as a free user — you type a prompt, the token limit hits, so you switch to another account and start over. Same loop, over and over, never actually finishing the work.
+You've been using AI as a free user, you type a prompt, the token limit hits, so you switch to another account and start over. Same loop, over and over, never actually finishing the work.
 
 **I built Kazu to fix that.**
 
-Kazu is a desktop interface where you open multiple panes — one per account, one per AI — all in a single window. Split your task equally across each pane, work them all at once, and finish in a fraction of the time. No more tab-switching. No more losing context. No more worrying about token limits.
+Kazu is a desktop interface where you open multiple panes, one per account, one per AI, all in a single window. Split your task equally across each pane, work them all at once, and finish in a fraction of the time. No more tab-switching. No more losing context. No more worrying about token limits.
 
-> **Your passwords are always safe.** You sign in directly on each AI's website, exactly as you would in a normal browser. Kazu never sees your credentials — ever.
+> **Your passwords are always safe.** You sign in directly on each AI's website, exactly as you would in a normal browser. Kazu never sees your credentials. Ever.
 
 ---
 
@@ -39,34 +39,34 @@ Go to [**Releases →**](https://github.com/Goutham-K-278/KAZU/releases/latest) 
 |---|---|---|
 | **Windows 10 / 11** | `Kazu-Setup-*-Windows-x64.exe` | Double-click. No admin rights needed. Appears in Start Menu and Desktop. |
 | **macOS 12+** | `Kazu-*-macOS.dmg` | Open the `.dmg`, drag Kazu into Applications. Done. |
-| **Ubuntu / Debian** | `kazu_*_amd64.deb` | `sudo apt install ./kazu_*_amd64.deb` — appears in your Applications menu. |
+| **Ubuntu / Debian** | `kazu_*_amd64.deb` | `sudo apt install ./kazu_*_amd64.deb`, then find Kazu in your Applications menu. |
 
 ---
 
 ## Why Kazu?
 
 ### 🪟 One window for all your AI tools
-- See Claude, ChatGPT, Gemini side by side — no more alt-tabbing
+- See Claude, ChatGPT, Gemini side by side, no more alt-tabbing
 - Compare answers instantly across panes
 - 1–4 pane layouts with draggable splitters
 
-### 🔐 Every AI stays logged in — always
+### 🔐 Every AI stays logged in, always
 - Each pane has its own completely private session
 - Multiple accounts in multiple panes, all at once
-- Nothing leaks between panes — ever
+- Nothing leaks between panes. Ever.
 
-### 🗂 Spaces — virtual desktops for your AI work
+### 🗂 Spaces, like virtual desktops for your AI work
 - Group panes into named Spaces: "Research", "Coding", "Writing"
 - Switch Spaces in one click
 - Activity dots on tabs light up when a background reply comes in
 
-### 🧠 Smart memory — uses RAM only when needed
+### 🧠 Smart memory, uses RAM only when needed
 - Background Spaces freeze → hibernate → unload automatically
 - Streams always finish before anything hibernates
-- "Waking up…" preview when you switch back
+- "Waking up..." preview when you switch back
 - Pin any pane to keep it always live
 
-### ✨ Gemini & Google accounts — it just works
+### ✨ Gemini & Google accounts, it just works
 - Kazu detects when Google blocks an embedded browser
 - Opens Gemini in **Companion Mode**: your real Chrome/Edge/Brave, bar-free, auto-tiled
 - Zero manual workarounds
@@ -74,18 +74,18 @@ Go to [**Releases →**](https://github.com/Goutham-K-278/KAZU/releases/latest) 
 ### ⌨️ Keyboard-first
 | Shortcut | What it does |
 |---|---|
-| `Ctrl+K` | Command palette — jump anywhere, open any site |
+| `Ctrl+K` | Command palette, jump anywhere, open any site |
 | `Ctrl+Shift+T` | Undo a closed pane (5-second window) |
-| `Ctrl+Shift+B` | Draft Composer — write once, send to all panes |
-| `Ctrl+W` | Focus mode — maximise one pane |
+| `Ctrl+Shift+B` | Draft Composer, write once, send to all panes |
+| `Ctrl+W` | Focus mode, maximise one pane |
 | Pass-Through Mode | Let site shortcuts reach the site, not Kazu |
 
 ### 🛡 Quiet details that matter
-- Crash / offline / sign-out shown **per pane** — one broken site doesn't touch the rest
+- Crash / offline / sign-out shown **per pane**, so one broken site doesn't touch the rest
 - File downloads with progress toasts and auto-numbered filenames
 - Window auto-recovers if you unplug a monitor
 - Real RAM usage, not the number your OS guesses
-- Light, dark, and system themes — no white flash on startup
+- Light, dark, and system themes with no white flash on startup
 
 ---
 
@@ -97,11 +97,11 @@ Go to [**Releases →**](https://github.com/Goutham-K-278/KAZU/releases/latest) 
 **Panes & Layouts**
 - 1–4 panes per Space with draggable splitters
 - Auto-fit zoom so sites keep their desktop layout even in narrow panes
-- Snapshot preview with "Waking up…" animation on pane reload
+- Snapshot preview with "Waking up..." animation on pane reload
 
 **Accounts & Sessions**
 - Colour-coded accounts with auto-naming, rename, recolour
-- "Sign out & wipe data" — removes the session folder completely
+- "Sign out & wipe data", removes the session folder completely
 - Companion Mode for Gemini and any Google-only account
 - Google-block detection with "Use email login" or "Switch to Companion" prompt
 - OAuth popups at a proper size with domain lock
@@ -153,7 +153,7 @@ Kazu works with any website. Ships with ready-made presets for:
 
 **Claude · ChatGPT · Gemini · Perplexity · DeepSeek · Mistral · Grok · Copilot**
 
-And any custom URL — Notion, GitHub, Ollama running locally, your company's internal tools.
+And any custom URL, including Notion, GitHub, Ollama running locally, and your company's internal tools.
 
 ---
 
@@ -184,7 +184,7 @@ uv run pytest
 
 **Publish a release (maintainers)**
 
-Push a version tag — GitHub Actions builds and attaches the Windows `.exe`, macOS `.dmg`, and Linux `.deb` installers automatically:
+Push a version tag and GitHub Actions will build and attach the Windows `.exe`, macOS `.dmg`, and Linux `.deb` installers automatically:
 
 ```bash
 git tag v0.1.0
@@ -195,7 +195,7 @@ git push origin v0.1.0
 
 ## License
 
-MIT © Goutham K — see [LICENSE](LICENSE) for details.
+MIT © Goutham K, see [LICENSE](LICENSE) for details.
 
 ---
 
