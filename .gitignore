@@ -29,6 +29,23 @@ build/
 profiles/
 companion/
 logs/
+*.log
+
+# Internal documentation & specifications
+docs/
+code-doc.md
+
+# Agent scratch & temporary
+brain/
+*.tmp
+*.bak
+
+# IDE & Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
