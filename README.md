@@ -77,7 +77,7 @@ Go to [**Releases →**](https://github.com/Goutham-K-278/KAZU/releases/latest) 
 | `Ctrl+K` | Command palette, jump anywhere, open any site |
 | `Ctrl+Shift+T` | Undo a closed pane (5-second window) |
 | `Ctrl+Shift+B` | Draft Composer, write once, send to all panes |
-| `Ctrl+W` | Focus mode, maximise one pane |
+| `Ctrl+W` | Close active pane (with 5-second Undo) |
 | Pass-Through Mode | Let site shortcuts reach the site, not Kazu |
 
 ### 🛡 Quiet details that matter
@@ -164,7 +164,7 @@ Requires **Python 3.11+** and [uv](https://docs.astral.sh/uv/).
 ```bash
 # 1. Clone
 git clone https://github.com/Goutham-K-278/KAZU.git
-cd KAZU/kazu
+cd KAZU
 
 # 2. Install dependencies
 uv sync --extra dev

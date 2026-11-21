@@ -47,9 +47,19 @@ class TieredLifecycleService:
         freeze_after_seconds: float = 600.0,
         discard_after_seconds: float = 1800.0,
     ) -> None:
+        self._freeze_after_s: float = 600.0
+        self._discard_after_s: float = 1800.0
+        self.update_thresholds(freeze_after_seconds, discard_after_seconds)
+        self._records: dict[str, PaneLifecycleRecord] = {}
+
+    def update_thresholds(
+        self,
+        freeze_after_seconds: float,
+        discard_after_seconds: float,
+    ) -> None:
+        """Apply updated freeze/discard delays immediately without requiring restart."""
         self._freeze_after_s = max(30.0, float(freeze_after_seconds))
         self._discard_after_s = max(self._freeze_after_s + 30.0, float(discard_after_seconds))
-        self._records: dict[str, PaneLifecycleRecord] = {}
 
     def register_pane(
         self,

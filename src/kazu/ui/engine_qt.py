@@ -3,10 +3,10 @@
 Implements:
 - Atomic profile creation via QWebEngineProfileBuilder (Qt 6.9+) with 6.8 fallback
 - Pre-paint theme background matching (Bug #2: zero dark-mode white flash)
-- NavigationPolicy routing (in-pane vs. system browser)
-- Centered 520x680 OAuthPopup sharing the account's profile (Bug #10)
+- NavigationPolicy routing (in-pane redirects/OAuth; external links to OS browser)
+- Centered 520x680 OAuthPopup sharing the account's profile + BlockDetector monitoring
 - Native WebAuthnDialog hook for FIDO2 keys (Problem A4)
-- Crash recovery, BlockDetector, and Activity Guard signals
+- Crash recovery, BlockDetector, Activity Guard, and permission handling
 - Zero QWebChannel exposure and disabled file-URL access
 - Download interception via downloadRequested so files actually save to disk
 """
@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QBuffer, QIODevice, QTimer, QUrl
+from PySide6.QtCore import QBuffer, QIODevice, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWebEngineCore import (
     QWebEngineDownloadRequest,
@@ -94,13 +94,17 @@ class AgentPage(QWebEnginePage):
         account: Account,
         preset: ProviderPreset,
         nav_policy: NavigationPolicy,
+        block_detector: BlockDetector,
         bg_hex: str,
+        on_google_blocked: Callable[[], None] | None = None,
         parent: Any = None,
     ) -> None:
         super().__init__(profile, parent)
         self._account = account
         self._preset = preset
         self._nav_policy = nav_policy
+        self._block_detector = block_detector
+        self._on_google_blocked = on_google_blocked
         self._popups: list[OAuthPopup] = []
 
         # Bug #2: paint theme background before first load to prevent white flash.
@@ -109,12 +113,18 @@ class AgentPage(QWebEnginePage):
         # Harden page settings: no local file access, no QWebChannel bridge.
         settings = self.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, False)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)  # noqa: E501
+        settings.setAttribute(
+            QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False
+        )
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
 
         # Problem A4: native FIDO2 / WebAuthn dialog.
         if hasattr(self, "webAuthUxRequested"):
             self.webAuthUxRequested.connect(self._handle_webauthn_request)
+
+        # Grant clipboard permissions smoothly for provider sites (Qt 6.7/6.8+).
+        if hasattr(self, "featurePermissionRequested"):
+            self.featurePermissionRequested.connect(self._handle_feature_permission)
 
     def acceptNavigationRequest(
         self,
@@ -122,27 +132,31 @@ class AgentPage(QWebEnginePage):
         nav_type: QWebEnginePage.NavigationType,
         is_main_frame: bool,
     ) -> bool:
-        # Always allow sub-frame navigations (ads, iframes, etc.).
+        # Always allow sub-frame navigations (iframes, Turnstile/OAuth widgets).
         if not is_main_frame:
             return True
 
         qurl = url if isinstance(url, QUrl) else QUrl(url)
+        url_str = qurl.toString()
         scheme = qurl.scheme().lower()
 
-        # Allow blob: URLs — Claude and other sites use these for file downloads.
-        # Qt intercepts blob: navigations that have a Content-Disposition and fires
-        # downloadRequested on the profile; blocking them here prevents that signal.
-        if scheme == "blob":
+        # Allow about:blank (used by JS-initialized OAuth popups) and blob: (file downloads).
+        if url_str.strip().lower() == "about:blank" or scheme == "blob":
             return True
 
         # Block everything that is not http/https (data:, javascript:, file:, etc.).
         if scheme not in ("https", "http"):
             return False
 
+        # Only treat explicit user link clicks as candidates for opening externally.
+        # Server redirects and form submits stay in-pane so OAuth cookies never break.
+        is_link_click = nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
+
         decision = self._nav_policy.decide(
-            url=qurl.toString(),
+            url=url_str,
             preset=self._preset,
             home_url=self._account.home_url,
+            is_user_link_click=is_link_click,
         )
         if decision == NavigationAction.ALLOW_IN_PANE:
             return True
@@ -152,51 +166,67 @@ class AgentPage(QWebEnginePage):
         return False
 
     def createWindow(self, win_type: QWebEnginePage.WebWindowType) -> QWebEnginePage:
-        """Spawn a centered 520x680 OAuthPopup sharing the same profile (Bug #10)."""
+        """Spawn a centered 520x680 OAuthPopup sharing the same profile (Bug #10).
+
+        Monitors the popup with BlockDetector so if Google rejects QtWebEngine
+        (disallowed_useragent or 400 Bad Request), the popup closes cleanly and
+        the pane displays the one-click Companion Mode recovery card.
+        """
         popup_view = QWebEngineView()
         popup_page = QWebEnginePage(self.profile(), popup_view)
         popup_view.setPage(popup_page)
 
         dialog = OAuthPopup(web_view=popup_view, parent=self.parent())  # type: ignore[arg-type]
 
-        # Track whether this popup visited an auth/OAuth domain so we know
-        # whether to reload the main pane when it closes.
-        visited_auth_domain: list[bool] = [False]
+        def _check_popup_block(qurl: QUrl, title: str) -> None:
+            if self._block_detector.is_google_blocked(qurl.toString(), title):
+                dialog.close()
+                if self._on_google_blocked is not None:
+                    self._on_google_blocked()
 
         def _on_url_changed(qurl: QUrl) -> None:
             dialog.set_display_url(qurl.toString())
-            host = (qurl.host() or "").lower()
-            from kazu.controllers.navigation import OAUTH_PASSTHROUGH_DOMAINS
-            for auth_domain in OAUTH_PASSTHROUGH_DOMAINS:
-                if host == auth_domain or host.endswith(f".{auth_domain}"):
-                    visited_auth_domain[0] = True
-                    return
+            _check_popup_block(qurl, popup_page.title())
+
+        def _on_title_changed(title: str) -> None:
+            _check_popup_block(popup_page.url(), title)
 
         popup_page.urlChanged.connect(_on_url_changed)
+        popup_page.titleChanged.connect(_on_title_changed)
         popup_page.windowCloseRequested.connect(dialog.close)
-        dialog.finished.connect(lambda _: self._cleanup_popup(dialog, visited_auth_domain))
+        dialog.finished.connect(lambda _: self._cleanup_popup(dialog))
 
         self._popups.append(dialog)
         dialog.show()
         return popup_page
 
-    def _cleanup_popup(self, dialog: OAuthPopup, visited_auth: list[bool] | None = None) -> None:
+    def _cleanup_popup(self, dialog: OAuthPopup) -> None:
         if dialog in self._popups:
             self._popups.remove(dialog)
-        did_oauth = visited_auth is not None and visited_auth[0]
         dialog.deleteLater()
-        if did_oauth:
-            # Navigate to the account's home URL (not a raw reload) so a stale
-            # OAuth callback URL in the pane cannot trigger another Google auth
-            # round-trip, which would cause a 400 Bad Request.
-            # The session cookie is already written to the shared profile, so
-            # loading home URL will give the app a fresh, authenticated page load.
-            home = QUrl(self._account.home_url)
-            QTimer.singleShot(500, lambda: self.setUrl(home))
 
     def _handle_webauthn_request(self, request: Any) -> None:
         dialog = WebAuthnDialog(request=request, parent=self.parent())  # type: ignore[arg-type]
         dialog.exec()
+
+    def _handle_feature_permission(self, origin: QUrl, feature: Any) -> None:
+        """Grant clipboard/notifications/audio cleanly on provider origins."""
+        policy = QWebEnginePage.PermissionPolicy
+        allowed_features = {
+            getattr(QWebEnginePage.Feature, name, None)
+            for name in (
+                "Notifications",
+                "MediaAudioCapture",
+                "MediaVideoCapture",
+                "MediaAudioVideoCapture",
+            )
+        }
+        decision = (
+            policy.PermissionGrantedByUser
+            if feature in allowed_features
+            else policy.PermissionDeniedByUser
+        )
+        self.setFeaturePermission(origin, feature, decision)  # type: ignore[arg-type]
 
 
 class QtWebEnginePane:
@@ -222,6 +252,7 @@ class QtWebEnginePane:
         self._on_google_blocked = on_google_blocked
         self._on_crashed = on_crashed
         self._on_signed_out_changed = on_signed_out_changed
+        self._disposed: bool = False
 
         self._view = QWebEngineView()
         self._page = AgentPage(
@@ -229,7 +260,9 @@ class QtWebEnginePane:
             account=account,
             preset=preset,
             nav_policy=nav_policy,
+            block_detector=block_detector,
             bg_hex=bg_hex,
+            on_google_blocked=on_google_blocked,
             parent=self._view,
         )
         self._view.setPage(self._page)
@@ -245,25 +278,33 @@ class QtWebEnginePane:
         return self._view
 
     def load_url(self, url: str) -> None:
-        self._view.load(QUrl(url))
+        if not self._disposed:
+            self._view.load(QUrl(url))
 
     def reload(self) -> None:
-        self._view.reload()
+        if not self._disposed:
+            self._view.reload()
 
     def back(self) -> None:
-        self._view.back()
+        if not self._disposed:
+            self._view.back()
 
     def forward(self) -> None:
-        self._view.forward()
+        if not self._disposed:
+            self._view.forward()
 
     def set_zoom(self, factor: float) -> None:
-        self._view.setZoomFactor(factor)
+        if not self._disposed:
+            self._view.setZoomFactor(factor)
 
     def find_text(self, query: str) -> None:
-        self._view.findText(query)
+        if not self._disposed:
+            self._view.findText(query)
 
     def set_lifecycle_tier(self, tier: LifecycleTier) -> None:
         """Map Kazu's 4-tier lifecycle onto QtWebEnginePage.LifecycleState."""
+        if self._disposed:
+            return
         state_enum = QWebEnginePage.LifecycleState
         if tier in (LifecycleTier.LIVE, LifecycleTier.HIDDEN_ACTIVE):
             self._page.setLifecycleState(state_enum.Active)
@@ -275,6 +316,8 @@ class QtWebEnginePane:
 
     def grab_snapshot_png(self) -> bytes:
         """Capture a lightweight PNG screenshot before discarding."""
+        if self._disposed:
+            return b""
         pixmap = self._view.grab()
         buf = QBuffer()
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -282,35 +325,53 @@ class QtWebEnginePane:
         return bytes(buf.data())  # type: ignore[arg-type]
 
     def focus_view(self) -> bool:
+        if self._disposed:
+            return False
         self._view.setFocus()
         return self._view.hasFocus()
 
     def trigger_paste(self) -> None:
-        self._page.triggerAction(QWebEnginePage.WebAction.Paste)
+        if not self._disposed:
+            self._page.triggerAction(QWebEnginePage.WebAction.Paste)
 
     def selected_text(self) -> str:
+        if self._disposed:
+            return ""
         return self._page.selectedText()
 
     def dispose(self) -> None:
-        """Destroy view and page cleanly BEFORE profile teardown (Problem B3)."""
+        """Destroy view and page cleanly BEFORE profile teardown (Problem B3, idempotent)."""
+        if self._disposed:
+            return
+        self._disposed = True
         self._view.hide()
         self._view.setPage(None)  # type: ignore[arg-type]
         self._page.deleteLater()
         self._view.deleteLater()
 
     def _emit_activity(self) -> None:
-        if self._on_activity is not None:
+        if not self._disposed and self._on_activity is not None:
             self._on_activity()
 
     def _handle_title_changed(self, title: str) -> None:
+        if self._disposed:
+            return
         self._emit_activity()
         current_url = self._page.url().toString()
-        if self._block_detector.is_google_blocked(current_url, title) and self._on_google_blocked is not None:  # noqa: E501
+        if (
+            self._block_detector.is_google_blocked(current_url, title)
+            and self._on_google_blocked is not None
+        ):
             self._on_google_blocked()
 
     def _handle_url_changed(self, qurl: QUrl) -> None:
+        if self._disposed:
+            return
         url_str = qurl.toString()
-        if self._block_detector.is_google_blocked(url_str, self._page.title()) and self._on_google_blocked is not None:  # noqa: E501
+        if (
+            self._block_detector.is_google_blocked(url_str, self._page.title())
+            and self._on_google_blocked is not None
+        ):
             self._on_google_blocked()
         if self._on_signed_out_changed is not None:
             self._on_signed_out_changed(
@@ -319,7 +380,7 @@ class QtWebEnginePane:
 
     def _handle_crash(self, _status: Any, _exit_code: int) -> None:
         logger.warning("Embedded renderer terminated for account %s", self._account.id)
-        if self._on_crashed is not None:
+        if not self._disposed and self._on_crashed is not None:
             self._on_crashed()
 
 
@@ -354,7 +415,6 @@ class QtWebEngineFactory:
         profile = self._profiles.get(account_id)
         if profile is None:
             profile = _build_persistent_profile(account_id, self._paths)
-            # Wire download interception once per profile.
             profile.downloadRequested.connect(self._handle_download)
             self._profiles[account_id] = profile
         return profile
@@ -362,24 +422,23 @@ class QtWebEngineFactory:
     def _handle_download(self, download: QWebEngineDownloadRequest) -> None:
         """Accept a download, place it in the configured download dir, and notify the UI."""
         suggested = download.suggestedFileName() or "download"
-
-        # Resolve the target directory: user-configured > OS Downloads folder.
-        if self._download_dir:
-            target_dir = Path(self._download_dir).expanduser()
-        else:
-            target_dir = Path.home() / "Downloads"
+        target_dir = (
+            Path(self._download_dir).expanduser()
+            if self._download_dir
+            else Path.home() / "Downloads"
+        )
 
         try:
             dest = self._download_service.resolve_unique_path(target_dir, suggested)
         except (ValueError, OSError):
             logger.warning("Download path resolution failed for %r; using fallback.", suggested)
-            dest = target_dir / suggested
+            dest = target_dir / Path(suggested).name
 
         download.setDownloadDirectory(str(dest.parent))
         download.setDownloadFileName(dest.name)
         download.accept()
 
-        logger.info("Download accepted: %s", dest)
+        logger.info("Download accepted: %s", dest.name)
         if self._on_download_started is not None:
             self._on_download_started(dest.name, str(dest.parent))
 

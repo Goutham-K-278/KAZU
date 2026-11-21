@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -67,7 +68,7 @@ class AccountPicker(QFrame):
                 label = f"{preset.name}\n({preset.badge_hint})"
             btn = QPushButton(label)
             btn.setMinimumHeight(46)
-            btn.clicked.connect(  # noqa: E501
+            btn.clicked.connect(
                 lambda _=False, key=preset.key: self._on_pick_new_provider(key, None)
             )
             grid.addWidget(btn, row, col)
@@ -80,12 +81,20 @@ class AccountPicker(QFrame):
         # Custom URL row (Problem E7: first-class custom URLs)
         custom_row = QHBoxLayout()
         self._custom_url = QLineEdit()
-        self._custom_url.setPlaceholderText("Or enter any URL (e.g. https://notion.so, http://localhost:3000)")
+        self._custom_url.setPlaceholderText(
+            "Or enter any URL (e.g. https://notion.so, http://localhost:3000)"
+        )
+        self._custom_url.returnPressed.connect(self._handle_custom_url)
         add_custom_btn = QPushButton("Open URL")
         add_custom_btn.clicked.connect(self._handle_custom_url)
         custom_row.addWidget(self._custom_url, stretch=1)
         custom_row.addWidget(add_custom_btn)
         layout.addLayout(custom_row)
+
+        self._url_error = QLabel("")
+        self._url_error.setStyleSheet("color: #F87171; font-size: 12px;")
+        self._url_error.hide()
+        layout.addWidget(self._url_error)
 
         if existing_accounts:
             existing_label = QLabel("Or reuse an existing account:")
@@ -97,7 +106,9 @@ class AccountPicker(QFrame):
                 suffix = f" — Open in {locs[0][0].name}" if locs else ""
                 btn = QPushButton(f"{account.label}{suffix}")
                 btn.clicked.connect(
-                    lambda _=False, acc=account, opened=bool(locs): self._handle_existing(acc, opened)  # noqa: E501
+                    lambda _=False, acc=account, opened=bool(locs): self._handle_existing(
+                        acc, opened
+                    )
                 )
                 layout.addWidget(btn)
 
@@ -107,6 +118,12 @@ class AccountPicker(QFrame):
             return
         if not (raw.startswith("https://") or raw.startswith("http://")):
             raw = f"https://{raw}"
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+            self._url_error.setText("Please enter a valid website URL (e.g. https://example.com).")
+            self._url_error.show()
+            return
+        self._url_error.hide()
         self._on_pick_new_provider("custom", raw)
 
     def _handle_existing(self, account: Account, already_open: bool) -> None:

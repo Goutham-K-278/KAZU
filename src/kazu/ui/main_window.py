@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
                 on_download_started=self._handle_download_started,
             )
         return self._qt_engine_factory
+
     def _bootstrap_workspace(self) -> None:
         if not self._settings.onboarding_completed:
             dialog = OnboardingDialog(window_width_px=self.width(), parent=self)
@@ -210,10 +211,12 @@ class MainWindow(QMainWindow):
         if target is None:
             return
 
-        if self._settings.confirm_delete_space and not self._confirm_delete_space_dialog(target.name):  # noqa: E501
+        if (
+            self._settings.confirm_delete_space
+            and not self._confirm_delete_space_dialog(target.name)
+        ):
             return
 
-        # Determine which Space to focus next if deleting the active Space.
         next_space_id = self._active_space_id
         if space_id == self._active_space_id:
             remaining = [s for s in spaces if s.id != space_id]
@@ -298,7 +301,9 @@ class MainWindow(QMainWindow):
                 ),
             )
             frame.set_content_widget(card, engine=self._companion)
-            self._companion.launch(account)
+            # Only auto-launch if not already running (prevents duplicate windows on Space rebuild).
+            if not self._companion.is_running(account.id):
+                self._companion.launch(account)
         else:
             factory = self._get_qt_factory()
             pane_engine = factory.create_pane(
@@ -321,7 +326,13 @@ class MainWindow(QMainWindow):
         return frame
 
     def _assign_new_provider(self, pane_id: str, provider_key: str, custom_url: str | None) -> None:
-        account = self._accounts.create_account(provider_key=provider_key, custom_url=custom_url)
+        try:
+            account = self._accounts.create_account(
+                provider_key=provider_key, custom_url=custom_url
+            )
+        except ValueError as exc:
+            self._toast.show_message(str(exc))
+            return
         self._spaces.assign_account(self._active_space_id, pane_id, account.id)
         self._rebuild_active_space()
 
@@ -508,8 +519,13 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._db.save_settings(self._settings)
             self._shortcuts.pass_through_mode = self._settings.pass_through_mode
+            self._lifecycle.update_thresholds(
+                freeze_after_seconds=self._settings.freeze_after_minutes * 60,
+                discard_after_seconds=self._settings.discard_after_minutes * 60,
+            )
+            for frame in self._stack.all_panes():
+                frame.set_zoom_mode(self._settings.zoom_mode)
             self._apply_theme()
-            # Propagate updated download directory to the factory if it exists.
             if self._qt_engine_factory is not None:
                 self._qt_engine_factory.set_download_dir(self._settings.download_dir)
 
@@ -523,8 +539,13 @@ class MainWindow(QMainWindow):
     def _apply_theme(self) -> None:
         if self._settings.theme == ThemeMode.LIGHT:
             self._tokens = LIGHT_TOKENS
-        else:
+        elif self._settings.theme == ThemeMode.DARK:
             self._tokens = DARK_TOKENS
+        else:
+            scheme = QApplication.styleHints().colorScheme()
+            self._tokens = (
+                LIGHT_TOKENS if scheme == Qt.ColorScheme.Light else DARK_TOKENS
+            )
         self.setStyleSheet(build_qss(self._tokens))
         if self._qt_engine_factory is not None:
             self._qt_engine_factory.set_background_hex(self._tokens.bg)

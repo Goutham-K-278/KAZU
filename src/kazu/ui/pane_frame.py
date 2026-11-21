@@ -25,6 +25,8 @@ from kazu.ui.block_card import build_crash_card, build_google_block_card
 from kazu.ui.find_bar import FindBar
 from kazu.ui.theme.tokens import ACCOUNT_DOT_HEX
 
+MIN_RESIZE_WIDTH_FOR_ZOOM: int = 200
+
 
 class PaneFrame(QFrame):
     """Visual frame for one pane with a 26px header, dot, Keep Running pin, and ⋯ menu."""
@@ -42,7 +44,6 @@ class PaneFrame(QFrame):
         on_toggle_keep_running: Callable[[str, bool], None] | None = None,
         on_switch_engine: Callable[[str, EngineKind], None] | None = None,
         on_rename_account: Callable[[str, str], None] | None = None,
-        # Keep old name for backwards compat — wired to on_switch_engine(COMPANION)
         on_switch_companion: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -58,9 +59,10 @@ class PaneFrame(QFrame):
         self._on_toggle_keep_running = on_toggle_keep_running
         self._on_rename_account = on_rename_account
         self._on_switch_engine = on_switch_engine
-        # Legacy compat: wrap old-style on_switch_companion
         self._on_switch_companion = on_switch_companion
         self._engine: Any = None
+        self._content_widget: QWidget | None = None
+        self._overlay_card: QWidget | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -112,7 +114,7 @@ class PaneFrame(QFrame):
         )
         root.addWidget(self._find_bar)
 
-        # Stacked content: primary view / snapshot wake preview / recovery cards
+        # Stacked content: snapshot wake preview / primary view / single overlay card
         self._stack = QStackedWidget()
         root.addWidget(self._stack, stretch=1)
 
@@ -124,6 +126,11 @@ class PaneFrame(QFrame):
         """Toggle pane header for Focus mode (§8.1)."""
         self._header.setVisible(visible)
 
+    def set_zoom_mode(self, mode: ZoomMode) -> None:
+        """Apply updated zoom mode immediately."""
+        self._zoom_mode = mode
+        self._apply_autofit_zoom()
+
     def set_active(self, active: bool) -> None:
         self._header.setProperty("active", "true" if active else "false")
         self._header.style().unpolish(self._header)
@@ -133,9 +140,26 @@ class PaneFrame(QFrame):
         self._signed_out_dot.setVisible(signed_out)
 
     def set_content_widget(self, widget: QWidget, engine: Any = None) -> None:
+        if self._content_widget is not None:
+            self._stack.removeWidget(self._content_widget)
+            self._content_widget.deleteLater()
+        self._clear_overlay_card()
         self._engine = engine
-        idx = self._stack.addWidget(widget)
-        self._stack.setCurrentIndex(idx)
+        self._content_widget = widget
+        self._stack.addWidget(widget)
+        self._stack.setCurrentWidget(widget)
+
+    def _show_overlay_card(self, card: QWidget) -> None:
+        self._clear_overlay_card()
+        self._overlay_card = card
+        self._stack.addWidget(card)
+        self._stack.setCurrentWidget(card)
+
+    def _clear_overlay_card(self) -> None:
+        if self._overlay_card is not None:
+            self._stack.removeWidget(self._overlay_card)
+            self._overlay_card.deleteLater()
+            self._overlay_card = None
 
     def show_snapshot_preview(self, png_bytes: bytes) -> None:
         pixmap = QPixmap()
@@ -153,26 +177,37 @@ class PaneFrame(QFrame):
 
     def show_google_block_card(self) -> None:
         card = build_google_block_card(
-            on_use_email=self.reload,
+            on_use_email=self.load_home,
             on_switch_companion=lambda: self._request_switch_engine(EngineKind.COMPANION),
             parent=self,
         )
-        idx = self._stack.addWidget(card)
-        self._stack.setCurrentIndex(idx)
+        self._show_overlay_card(card)
 
     def show_crash_card(self) -> None:
         card = build_crash_card(on_reload=self.reload, parent=self)
-        idx = self._stack.addWidget(card)
-        self._stack.setCurrentIndex(idx)
+        self._show_overlay_card(card)
 
     def open_find_bar(self) -> None:
         self._find_bar.open_bar()
 
+    def load_home(self) -> None:
+        """Return to the account's home URL (used by 'Use email login' to escape Google block)."""
+        self._clear_overlay_card()
+        if self._content_widget is not None:
+            self._stack.setCurrentWidget(self._content_widget)
+        if (
+            self._engine is not None
+            and hasattr(self._engine, "load_url")
+            and self.account is not None
+        ):
+            self._engine.load_url(self.account.home_url)
+
     def reload(self) -> None:
+        self._clear_overlay_card()
+        if self._content_widget is not None:
+            self._stack.setCurrentWidget(self._content_widget)
         if self._engine is not None and hasattr(self._engine, "reload"):
             self._engine.reload()
-            if self._stack.count() > 1:
-                self._stack.setCurrentIndex(1)
 
     def focus_input(self) -> bool:
         if self._engine is not None and hasattr(self._engine, "focus_view"):
@@ -185,6 +220,7 @@ class PaneFrame(QFrame):
             self._engine.trigger_paste()
 
     def dispose(self) -> None:
+        self._clear_overlay_card()
         if self._engine is not None and hasattr(self._engine, "dispose"):
             self._engine.dispose()
             self._engine = None
@@ -196,7 +232,15 @@ class PaneFrame(QFrame):
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        if self._engine is not None and hasattr(self._engine, "set_zoom") and self.account:
+        self._apply_autofit_zoom()
+
+    def _apply_autofit_zoom(self) -> None:
+        if (
+            self.width() >= MIN_RESIZE_WIDTH_FOR_ZOOM
+            and self._engine is not None
+            and hasattr(self._engine, "set_zoom")
+            and self.account is not None
+        ):
             result = self._autofit.compute(
                 pane_width_px=self.width(),
                 target_css_width=self._target_css_width,
@@ -234,11 +278,9 @@ class PaneFrame(QFrame):
         menu.addAction("Find in page", self.open_find_bar)
         menu.addSeparator()
 
-        # Rename pane / account label
         if self.account is not None and self._on_rename_account is not None:
             menu.addAction("Rename pane...", self._handle_rename_account)
 
-        # Engine-switch: show the opposite of whatever mode this pane is in
         if self.account is not None:
             if self.account.engine == EngineKind.COMPANION:
                 menu.addAction(
@@ -269,7 +311,7 @@ class PaneFrame(QFrame):
         menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
 
     def _handle_rename_account(self) -> None:
-        """Prompt the user for a new label and call on_rename_account."""
+        """Prompt the user for a new label and update both DB and in-memory Account."""
         if self.account is None or self._on_rename_account is None:
             return
         new_label, ok = QInputDialog.getText(
@@ -278,6 +320,8 @@ class PaneFrame(QFrame):
             "Enter a new name for this pane:",
             text=self.account.label,
         )
-        if ok and new_label.strip():
-            self._on_rename_account(self.account.id, new_label.strip())
-            self._title_label.setText(new_label.strip())
+        cleaned = new_label.strip()
+        if ok and cleaned:
+            self.account.label = cleaned
+            self._on_rename_account(self.account.id, cleaned)
+            self._title_label.setText(cleaned)

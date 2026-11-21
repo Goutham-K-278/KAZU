@@ -16,6 +16,8 @@ from kazu.controllers.navigation import (
     DownloadService,
     NavigationAction,
     NavigationPolicy,
+    extract_registrable_domain,
+    is_oauth_url,
 )
 from kazu.controllers.send import SendService
 from kazu.controllers.shortcuts import ShortcutRegistry
@@ -55,7 +57,7 @@ class _FakePaneTarget:
 
 
 class ServicesAndGuardsTests(unittest.TestCase):
-    def test_tiered_lifecycle_with_activity_guard_and_pin(self) -> None:
+    def test_tiered_lifecycle_with_activity_guard_pin_and_live_threshold_update(self) -> None:
         svc = TieredLifecycleService(freeze_after_seconds=600, discard_after_seconds=1800)
         svc.register_pane("p1", "s1", visible=True, now=0.0)
         svc.register_pane("p2", "s1", visible=True, keep_running=True, now=0.0)
@@ -72,8 +74,9 @@ class ServicesAndGuardsTests(unittest.TestCase):
         # At t=900 (400s since activity < 600s), p1 must NOT freeze yet!
         self.assertEqual(svc.evaluate_transitions(now=900.0), {})
 
-        # At t=1150 (650s since activity >= 600s), p1 freezes; pinned p2 stays HIDDEN_ACTIVE
-        self.assertEqual(svc.evaluate_transitions(now=1150.0), {"p1": LifecycleTier.FROZEN})
+        # Live threshold update (Settings saved without restart) takes effect immediately
+        svc.update_thresholds(freeze_after_seconds=300, discard_after_seconds=1800)
+        self.assertEqual(svc.evaluate_transitions(now=900.0), {"p1": LifecycleTier.FROZEN})
         self.assertEqual(svc.get_record("p2").tier, LifecycleTier.HIDDEN_ACTIVE)  # type: ignore[union-attr]
 
         # At t=2400 (1900s since activity >= 1800s), p1 discards
@@ -84,11 +87,13 @@ class ServicesAndGuardsTests(unittest.TestCase):
         self.assertEqual(waking, ["p1"])
         self.assertFalse(svc.space_has_unread_activity("s1"))
 
-    def test_navigation_policy_block_detector_and_auto_numbered_downloads(self) -> None:
+    def test_navigation_policy_oauth_redirects_custom_subdomains_and_google_400(self) -> None:
         presets = ProviderPresetRegistry()
         claude = presets.get("claude")
+        custom = presets.get("custom")
         policy = NavigationPolicy()
 
+        # Standard provider domain + external link
         self.assertEqual(
             policy.decide("https://claude.ai/chat/123", claude, claude.url),
             NavigationAction.ALLOW_IN_PANE,
@@ -106,9 +111,55 @@ class ServicesAndGuardsTests(unittest.TestCase):
             NavigationAction.BLOCK_UNSAFE,
         )
 
+        # about:blank must be allowed (used by JS-initialized OAuth popups)
+        self.assertEqual(
+            policy.decide("about:blank", custom, "https://app.pomaroo.ai"),
+            NavigationAction.ALLOW_IN_PANE,
+        )
+
+        # Sibling subdomain of a custom URL stays in-pane (app.pomaroo.ai -> auth.pomaroo.ai)
+        self.assertEqual(extract_registrable_domain("app.pomaroo.ai"), "pomaroo.ai")
+        self.assertEqual(extract_registrable_domain("app.service.co.uk"), "service.co.uk")
+        self.assertEqual(extract_registrable_domain("localhost"), "localhost")
+        self.assertEqual(
+            policy.decide("https://auth.pomaroo.ai/callback", custom, "https://app.pomaroo.ai"),
+            NavigationAction.ALLOW_IN_PANE,
+        )
+
+        # OAuth brokers (Supabase, Clerk, Firebase, Google) stay in-pane
+        self.assertTrue(is_oauth_url("https://xyz.supabase.co/auth/v1/authorize"))
+        self.assertEqual(
+            policy.decide(
+                "https://xyz.supabase.co/auth/v1/authorize",
+                custom,
+                "https://app.pomaroo.ai",
+            ),
+            NavigationAction.ALLOW_IN_PANE,
+        )
+
+        # Server redirects (is_user_link_click=False) stay in-pane so cookies never split
+        self.assertEqual(
+            policy.decide(
+                "https://sso.some-custom-broker.io/authorize",
+                custom,
+                "https://app.pomaroo.ai",
+                is_user_link_click=False,
+            ),
+            NavigationAction.ALLOW_IN_PANE,
+        )
+
+        # BlockDetector catches both disallowed_useragent and Google 400 Bad Request
         detector = BlockDetector()
         self.assertTrue(
-            detector.is_google_blocked("https://accounts.google.com/o/oauth2?error=disallowed_useragent")
+            detector.is_google_blocked(
+                "https://accounts.google.com/o/oauth2?error=disallowed_useragent"
+            )
+        )
+        self.assertTrue(
+            detector.is_google_blocked(
+                "https://accounts.google.com/signin/oauth/v2/consent?authuser=0",
+                "Error 400 (Bad Request)!!1",
+            )
         )
         self.assertTrue(detector.is_signed_out_url("https://claude.ai/login", claude))
 
@@ -149,7 +200,7 @@ class ServicesAndGuardsTests(unittest.TestCase):
     def test_shortcuts_pass_through_and_provider_conflicts(self) -> None:
         reg = ShortcutRegistry.default()
         self.assertTrue(reg.should_intercept("command_palette"))
-        self.assertFalse(  # noqa: E501
+        self.assertFalse(
             reg.should_intercept("command_palette", active_provider_quirks=("uses_ctrl_k",))
         )
         reg.pass_through_mode = True

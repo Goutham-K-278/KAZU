@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from kazu.domain.layout import clear_account_references, deserialize_layout, serialize_layout
 from kazu.domain.models import (
     ACCOUNT_COLOR_KEYS,
@@ -14,6 +16,15 @@ from kazu.domain.models import (
 from kazu.domain.providers import ProviderPresetRegistry
 from kazu.infra.db import Database
 from kazu.infra.paths import AppPaths
+
+
+def validate_home_url(raw_url: str) -> str:
+    """Validate that an account URL has an http/https scheme and a real hostname."""
+    cleaned = raw_url.strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Account URL must be a valid http:// or https:// address with a host.")
+    return cleaned
 
 
 class AccountController:
@@ -46,11 +57,14 @@ class AccountController:
         preset = self._presets.get(provider_key)
         existing = self._db.list_accounts()
 
-        home_url = (custom_url or preset.url).strip()
-        if not (home_url.startswith("https://") or home_url.startswith("http://")):
-            raise ValueError("Account URL must start with https:// or http://")
+        home_url = validate_home_url(custom_url or preset.url)
 
-        resolved_label = (label or self._next_default_label(preset.name, existing)).strip()
+        default_base = (
+            (urlparse(home_url).hostname or preset.name)
+            if preset.key == "custom" and custom_url
+            else preset.name
+        )
+        resolved_label = (label or self._next_default_label(default_base, existing)).strip()
         resolved_engine = engine if engine is not None else preset.pane_type
         color = self._next_color(existing)
 

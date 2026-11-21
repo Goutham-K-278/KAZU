@@ -53,6 +53,7 @@ class DomainAndLayoutTests(unittest.TestCase):
         # Corrupted JSON must never crash — returns single empty pane.
         fallback = deserialize_layout("{corrupted json!!!")
         self.assertIsInstance(fallback, PaneNode)
+        assert isinstance(fallback, PaneNode)
         self.assertIsNone(fallback.account_id)
 
     def test_split_swap_close_and_clear_references(self) -> None:
