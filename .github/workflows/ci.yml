@@ -17,6 +17,11 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - name: Set up Python 3.12
         run: uv python install 3.12
+      - name: Install system Qt dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Ruff lint (includes QtWebEngine banned-import rule)
