@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QSplitter, QStackedWidget, QWidget
+from PySide6.QtWidgets import QSizePolicy, QSplitter, QStackedWidget, QWidget
 
 from kazu.domain.layout import LayoutNode, PaneNode, SplitNode, iter_panes, normalize_sizes
 from kazu.domain.models import Orientation
@@ -24,6 +24,9 @@ class SpaceStack(QStackedWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         self._on_layout_resized = on_layout_resized
         self._space_widgets: dict[str, QWidget] = {}
         self._space_trees: dict[str, LayoutNode] = {}
@@ -51,11 +54,7 @@ class SpaceStack(QStackedWidget):
         self.setCurrentWidget(widget)
 
     def remove_space(self, space_id: str) -> list[str]:
-        """Dispose all panes belonging to `space_id` and remove its widget from the stack.
-
-        Returns the list of disposed pane_ids so callers can unregister them from
-        TieredLifecycleService and SnapshotCache.
-        """
+        """Dispose all panes belonging to `space_id` and remove its widget from the stack."""
         disposed_ids: list[str] = []
         old_tree = self._space_trees.pop(space_id, None)
         if old_tree is not None:
@@ -84,6 +83,18 @@ class SpaceStack(QStackedWidget):
     def get_pane(self, pane_id: str) -> PaneFrame | None:
         return self._panes.get(pane_id)
 
+    def panes_in_space(self, space_id: str) -> list[PaneFrame]:
+        """Return only the PaneFrames belonging to `space_id` in layout order."""
+        tree = self._space_trees.get(space_id)
+        if tree is None:
+            return []
+        result: list[PaneFrame] = []
+        for node in iter_panes(tree):
+            frame = self._panes.get(node.pane_id)
+            if frame is not None:
+                result.append(frame)
+        return result
+
     def all_panes(self) -> list[PaneFrame]:
         return list(self._panes.values())
 
@@ -109,6 +120,7 @@ class SpaceStack(QStackedWidget):
             else Qt.Orientation.Vertical
         )
         splitter = QSplitter(qt_orient)
+        splitter.setMinimumSize(0, 0)
         splitter.setHandleWidth(6)
         splitter.setChildrenCollapsible(False)
 

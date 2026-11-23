@@ -1,4 +1,4 @@
-"""Non-blocking toast notification with optional Undo action (Bug #5 fix)."""
+"""Non-blocking floating overlay toast notification (never shifts layout height)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 DEFAULT_TOAST_MS: int = 5000
+TOAST_BOTTOM_MARGIN_PX: int = 18
 
 
 class ToastBanner(QFrame):
-    """Calm floating toast for Undo-close, download progress, and RAM tips."""
+    """Calm floating overlay toast anchored at bottom-center of its parent window."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -19,7 +20,7 @@ class ToastBanner(QFrame):
         self.hide()
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(10)
 
         self._label = QLabel("")
@@ -37,6 +38,19 @@ class ToastBanner(QFrame):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
 
+    def reposition(self) -> None:
+        """Center this floating banner near the bottom of its parent without affecting layout."""
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.adjustSize()
+        max_w = max(220, parent.width() - 32)
+        width = min(self.sizeHint().width(), max_w)
+        height = self.sizeHint().height()
+        x = max(16, (parent.width() - width) // 2)
+        y = max(16, parent.height() - height - TOAST_BOTTOM_MARGIN_PX)
+        self.setGeometry(x, y, width, height)
+
     def show_message(
         self,
         message: str,
@@ -53,6 +67,7 @@ class ToastBanner(QFrame):
         else:
             self._action_btn.hide()
 
+        self.reposition()
         self.show()
         self.raise_()
         self._timer.start(duration_ms)

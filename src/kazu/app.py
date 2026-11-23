@@ -1,4 +1,7 @@
-"""Application bootstrap: HiDPI PassThrough, App Icon, SingleInstanceLock, and clean shutdown."""
+"""Application bootstrap.
+
+HiDPI PassThrough, Chromium tuning, App Icon, SingleInstanceLock, and clean shutdown.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +19,22 @@ from kazu.infra.shutdown import ShutdownCoordinator
 from kazu.infra.single_instance import SingleInstanceLock
 
 WINDOWS_APP_USER_MODEL_ID: str = "com.kazu.workspace"
+_DEFAULT_CHROMIUM_FLAGS: tuple[str, ...] = (
+    "--log-level=3",
+    "--enable-gpu-rasterization",
+    "--disable-features=MediaRouter",
+)
 
 
-def _quiet_chromium_console_noise() -> None:
-    """Suppress noisy Chromium/QtWebEngine stderr warnings (e.g. Permissions-Policy)."""
-    existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-    if "--log-level=" not in existing_flags:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{existing_flags} --log-level=3".strip()
+def _configure_chromium_runtime() -> None:
+    """Suppress noisy Chromium stderr warnings and disable unused background features."""
+    existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
+    existing_keys = {flag.split("=", 1)[0] for flag in existing_flags}
+    for flag in _DEFAULT_CHROMIUM_FLAGS:
+        key = flag.split("=", 1)[0]
+        if key not in existing_keys:
+            existing_flags.append(flag)
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(existing_flags).strip()
     os.environ.setdefault("QT_LOGGING_RULES", "js=false;qt.webenginecontext.debug=false")
 
 
@@ -53,7 +65,7 @@ def _configure_windows_taskbar_id() -> None:
 
 def run_app(argv: list[str] | None = None) -> int:
     """Launch Kazu with fast window startup, native app icon, and guaranteed ordered teardown."""
-    _quiet_chromium_console_noise()
+    _configure_chromium_runtime()
 
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QIcon

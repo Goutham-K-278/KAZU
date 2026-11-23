@@ -1,8 +1,9 @@
-"""Design tokens and QSS generator keeping Light and Dark themes in sync (§8.7)."""
+"""Design tokens and cached QSS generator keeping Light and Dark themes in sync (§8.7)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 # 8 color-blind-safe account dot colors matching domain.models.ACCOUNT_COLOR_KEYS.
 ACCOUNT_DOT_HEX: dict[str, str] = {
@@ -58,8 +59,9 @@ DARK_TOKENS = ThemeTokens(
 )
 
 
+@lru_cache(maxsize=4)
 def build_qss(tokens: ThemeTokens) -> str:
-    """Generate a complete Qt Style Sheet from a ThemeTokens palette."""
+    """Generate and cache a complete Qt Style Sheet from a ThemeTokens palette."""
     return f"""
 QMainWindow, QDialog, QWidget {{
     background-color: {tokens.bg};

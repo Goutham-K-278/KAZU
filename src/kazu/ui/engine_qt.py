@@ -4,9 +4,9 @@ Implements:
 - Atomic profile creation via QWebEngineProfileBuilder (Qt 6.9+) with 6.8 fallback
 - Pre-paint theme background matching (Bug #2: zero dark-mode white flash)
 - NavigationPolicy routing (in-pane redirects/OAuth; external links to OS browser)
-- Centered 520x680 OAuthPopup sharing the account's profile + BlockDetector monitoring
+- Centered, screen-clamped OAuthPopup sharing the account's profile + BlockDetector
 - Native WebAuthnDialog hook for FIDO2 keys (Problem A4)
-- Crash recovery, BlockDetector, Activity Guard, and permission handling
+- Crash recovery, loadFinished zoom re-apply hook, BlockDetector, and Activity Guard
 - Zero QWebChannel exposure and disabled file-URL access
 - Download interception via downloadRequested so files actually save to disk
 """
@@ -27,6 +27,7 @@ from PySide6.QtWebEngineCore import (
     QWebEngineSettings,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWidgets import QSizePolicy
 
 from kazu.controllers.lifecycle import LifecycleTier
 from kazu.controllers.navigation import (
@@ -71,7 +72,6 @@ def _build_persistent_profile(
             )
         profile = builder.createProfile(account_id, parent)
     except (ImportError, AttributeError):
-        # Clean fallback for Qt 6.7/6.8 before QWebEngineProfileBuilder existed.
         profile = QWebEngineProfile(account_id, parent)
         profile.setPersistentStoragePath(storage_path)
         profile.setCachePath(cache_path)
@@ -105,7 +105,7 @@ class AgentPage(QWebEnginePage):
         self._nav_policy = nav_policy
         self._block_detector = block_detector
         self._on_google_blocked = on_google_blocked
-        self._popups: list[OAuthPopup] = []
+        self._popups: list[tuple[OAuthPopup, QWebEngineView, QWebEnginePage]] = []
 
         # Bug #2: paint theme background before first load to prevent white flash.
         self.setBackgroundColor(QColor(bg_hex))
@@ -118,11 +118,9 @@ class AgentPage(QWebEnginePage):
         )
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
 
-        # Problem A4: native FIDO2 / WebAuthn dialog.
         if hasattr(self, "webAuthUxRequested"):
             self.webAuthUxRequested.connect(self._handle_webauthn_request)
 
-        # Grant clipboard permissions smoothly for provider sites (Qt 6.7/6.8+).
         if hasattr(self, "featurePermissionRequested"):
             self.featurePermissionRequested.connect(self._handle_feature_permission)
 
@@ -132,7 +130,6 @@ class AgentPage(QWebEnginePage):
         nav_type: QWebEnginePage.NavigationType,
         is_main_frame: bool,
     ) -> bool:
-        # Always allow sub-frame navigations (iframes, Turnstile/OAuth widgets).
         if not is_main_frame:
             return True
 
@@ -140,16 +137,12 @@ class AgentPage(QWebEnginePage):
         url_str = qurl.toString()
         scheme = qurl.scheme().lower()
 
-        # Allow about:blank (used by JS-initialized OAuth popups) and blob: (file downloads).
         if url_str.strip().lower() == "about:blank" or scheme == "blob":
             return True
 
-        # Block everything that is not http/https (data:, javascript:, file:, etc.).
         if scheme not in ("https", "http"):
             return False
 
-        # Only treat explicit user link clicks as candidates for opening externally.
-        # Server redirects and form submits stay in-pane so OAuth cookies never break.
         is_link_click = nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
 
         decision = self._nav_policy.decide(
@@ -166,12 +159,7 @@ class AgentPage(QWebEnginePage):
         return False
 
     def createWindow(self, win_type: QWebEnginePage.WebWindowType) -> QWebEnginePage:
-        """Spawn a centered 520x680 OAuthPopup sharing the same profile (Bug #10).
-
-        Monitors the popup with BlockDetector so if Google rejects QtWebEngine
-        (disallowed_useragent or 400 Bad Request), the popup closes cleanly and
-        the pane displays the one-click Companion Mode recovery card.
-        """
+        """Spawn a screen-clamped OAuthPopup sharing the same profile (Bug #10)."""
         popup_view = QWebEngineView()
         popup_page = QWebEnginePage(self.profile(), popup_view)
         popup_view.setPage(popup_page)
@@ -194,23 +182,37 @@ class AgentPage(QWebEnginePage):
         popup_page.urlChanged.connect(_on_url_changed)
         popup_page.titleChanged.connect(_on_title_changed)
         popup_page.windowCloseRequested.connect(dialog.close)
-        dialog.finished.connect(lambda _: self._cleanup_popup(dialog))
 
-        self._popups.append(dialog)
+        entry = (dialog, popup_view, popup_page)
+        dialog.finished.connect(lambda _: self._cleanup_popup(entry))
+
+        self._popups.append(entry)
         dialog.show()
         return popup_page
 
-    def _cleanup_popup(self, dialog: OAuthPopup) -> None:
-        if dialog in self._popups:
-            self._popups.remove(dialog)
+    def _cleanup_popup(
+        self,
+        entry: tuple[OAuthPopup, QWebEngineView, QWebEnginePage],
+    ) -> None:
+        dialog, popup_view, popup_page = entry
+        if entry in self._popups:
+            self._popups.remove(entry)
+        popup_view.setPage(None)  # type: ignore[arg-type]
+        popup_page.deleteLater()
+        popup_view.deleteLater()
         dialog.deleteLater()
+
+    def dispose_popups(self) -> None:
+        """Close and detach any lingering OAuth popups before profile teardown."""
+        for entry in list(self._popups):
+            entry[0].close()
+            self._cleanup_popup(entry)
 
     def _handle_webauthn_request(self, request: Any) -> None:
         dialog = WebAuthnDialog(request=request, parent=self.parent())  # type: ignore[arg-type]
         dialog.exec()
 
     def _handle_feature_permission(self, origin: QUrl, feature: Any) -> None:
-        """Grant clipboard/notifications/audio cleanly on provider origins."""
         policy = QWebEnginePage.PermissionPolicy
         allowed_features = {
             getattr(QWebEnginePage.Feature, name, None)
@@ -244,6 +246,7 @@ class QtWebEnginePane:
         on_google_blocked: Callable[[], None] | None = None,
         on_crashed: Callable[[], None] | None = None,
         on_signed_out_changed: Callable[[bool], None] | None = None,
+        on_load_finished: Callable[[bool], None] | None = None,
     ) -> None:
         self._account = account
         self._preset = preset
@@ -252,9 +255,13 @@ class QtWebEnginePane:
         self._on_google_blocked = on_google_blocked
         self._on_crashed = on_crashed
         self._on_signed_out_changed = on_signed_out_changed
+        self._on_load_finished = on_load_finished
         self._disposed: bool = False
 
         self._view = QWebEngineView()
+        self._view.setMinimumSize(0, 0)
+        self._view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         self._page = AgentPage(
             profile=profile,
             account=account,
@@ -270,6 +277,7 @@ class QtWebEnginePane:
 
         self._page.titleChanged.connect(self._handle_title_changed)
         self._page.urlChanged.connect(self._handle_url_changed)
+        self._page.loadFinished.connect(self._handle_load_finished)
         self._page.recentlyAudibleChanged.connect(lambda _: self._emit_activity())
         self._page.renderProcessTerminated.connect(self._handle_crash)
 
@@ -302,7 +310,6 @@ class QtWebEnginePane:
             self._view.findText(query)
 
     def set_lifecycle_tier(self, tier: LifecycleTier) -> None:
-        """Map Kazu's 4-tier lifecycle onto QtWebEnginePage.LifecycleState."""
         if self._disposed:
             return
         state_enum = QWebEnginePage.LifecycleState
@@ -315,7 +322,6 @@ class QtWebEnginePane:
             self._page.setLifecycleState(state_enum.Discarded)
 
     def grab_snapshot_png(self) -> bytes:
-        """Capture a lightweight PNG screenshot before discarding."""
         if self._disposed:
             return b""
         pixmap = self._view.grab()
@@ -340,10 +346,11 @@ class QtWebEnginePane:
         return self._page.selectedText()
 
     def dispose(self) -> None:
-        """Destroy view and page cleanly BEFORE profile teardown (Problem B3, idempotent)."""
+        """Destroy popups, view, and page cleanly BEFORE profile teardown (idempotent)."""
         if self._disposed:
             return
         self._disposed = True
+        self._page.dispose_popups()
         self._view.hide()
         self._view.setPage(None)  # type: ignore[arg-type]
         self._page.deleteLater()
@@ -352,6 +359,10 @@ class QtWebEnginePane:
     def _emit_activity(self) -> None:
         if not self._disposed and self._on_activity is not None:
             self._on_activity()
+
+    def _handle_load_finished(self, ok: bool) -> None:
+        if not self._disposed and self._on_load_finished is not None:
+            self._on_load_finished(ok)
 
     def _handle_title_changed(self, title: str) -> None:
         if self._disposed:
@@ -420,7 +431,6 @@ class QtWebEngineFactory:
         return profile
 
     def _handle_download(self, download: QWebEngineDownloadRequest) -> None:
-        """Accept a download, place it in the configured download dir, and notify the UI."""
         suggested = download.suggestedFileName() or "download"
         target_dir = (
             Path(self._download_dir).expanduser()
@@ -450,6 +460,7 @@ class QtWebEngineFactory:
         on_google_blocked: Callable[[], None] | None = None,
         on_crashed: Callable[[], None] | None = None,
         on_signed_out_changed: Callable[[bool], None] | None = None,
+        on_load_finished: Callable[[bool], None] | None = None,
     ) -> QtWebEnginePane:
         profile = self.get_or_create_profile(account.id)
         preset = self._presets.get(account.provider_key)
@@ -464,6 +475,7 @@ class QtWebEngineFactory:
             on_google_blocked=on_google_blocked,
             on_crashed=on_crashed,
             on_signed_out_changed=on_signed_out_changed,
+            on_load_finished=on_load_finished,
         )
 
     def dispose_all_profiles(self) -> None:

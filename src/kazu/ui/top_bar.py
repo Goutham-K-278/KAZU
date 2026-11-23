@@ -1,4 +1,4 @@
-"""Top bar: Space tabs with delete button, New Space, Command Palette, and Settings."""
+"""Top bar: Space tabs with delete button, double-click rename, New Space, Palette, and Settings."""
 
 from __future__ import annotations
 
@@ -13,6 +13,23 @@ from PySide6.QtWidgets import (
 )
 
 from kazu.domain.models import Space
+
+
+class _SpaceTabButton(QPushButton):
+    """Space tab button with clean double-click rename handling."""
+
+    def __init__(
+        self,
+        text: str,
+        on_double_click: Callable[[], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(text, parent)
+        self._on_double_click = on_double_click
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        event.accept()
+        self._on_double_click()
 
 
 class TopBar(QFrame):
@@ -34,7 +51,7 @@ class TopBar(QFrame):
         self._on_delete_space = on_delete_space
         self._on_rename_space = on_rename_space
         self._tab_groups: dict[str, QFrame] = {}
-        self._spaces: list[Space] = []
+        self._last_render_key: tuple[tuple[tuple[str, str], ...], str, frozenset[str]] | None = None
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(8, 0, 8, 0)
@@ -70,8 +87,16 @@ class TopBar(QFrame):
         active_space_id: str,
         unread_space_ids: set[str] | None = None,
     ) -> None:
-        self._spaces = spaces
-        unread = unread_space_ids or set()
+        unread_frozen = frozenset(unread_space_ids or ())
+        render_key = (
+            tuple((s.id, s.name) for s in spaces),
+            active_space_id,
+            unread_frozen,
+        )
+        if render_key == self._last_render_key:
+            return
+        self._last_render_key = render_key
+
         while self._tabs_layout.count():
             item = self._tabs_layout.takeAt(0)
             w = item.widget() if item is not None else None
@@ -83,7 +108,7 @@ class TopBar(QFrame):
 
         for space in spaces:
             is_active = space.id == active_space_id
-            dot = "● " if is_active else ("• " if space.id in unread else "○ ")
+            dot = "● " if is_active else ("• " if space.id in unread_frozen else "○ ")
 
             group = QFrame()
             group.setObjectName("SpaceTabGroup")
@@ -92,15 +117,16 @@ class TopBar(QFrame):
             group_layout.setContentsMargins(2, 2, 4, 2)
             group_layout.setSpacing(2)
 
-            tab_btn = QPushButton(f"{dot}{space.name}")
+            tab_btn = _SpaceTabButton(
+                f"{dot}{space.name}",
+                on_double_click=lambda sid=space.id, sname=space.name: self._handle_rename(
+                    sid, sname
+                ),
+            )
             tab_btn.setObjectName("SpaceTab")
             tab_btn.setProperty("active", "true" if is_active else "false")
             tab_btn.setToolTip("Double-click to rename")
             tab_btn.clicked.connect(lambda _=False, sid=space.id: self._on_select_space(sid))
-            # Double-click on the tab button triggers rename
-            tab_btn.mouseDoubleClickEvent = (  # type: ignore[method-assign]
-                lambda event, sid=space.id, sname=space.name: self._handle_rename(sid, sname)
-            )
             group_layout.addWidget(tab_btn)
 
             if can_delete:

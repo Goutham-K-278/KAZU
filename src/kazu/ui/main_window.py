@@ -44,6 +44,8 @@ from kazu.ui.top_bar import TopBar
 
 LIFECYCLE_POLL_MS: int = 15_000
 STAGGER_PANE_MS: int = 150
+ZOOM_STEP: float = 0.1
+RAM_CHECK_EVERY_N_TICKS: int = 4  # Every 60s
 
 
 class _QtClipboardAdapter:
@@ -93,15 +95,20 @@ class MainWindow(QMainWindow):
 
         self._active_space_id: str = ""
         self._active_pane_id: str = ""
+        self._last_pane_by_space: dict[str, str] = {}
         self._focus_mode: bool = False
+        self._maximized_pane_id: str | None = None
         self._tokens: ThemeTokens = DARK_TOKENS
+        self._screen_hooked: bool = False
+        self._lifecycle_tick_count: int = 0
+        self._ram_warned: bool = False
 
         self.setWindowTitle("Kazu")
-        self.resize(1360, 860)
         self._restore_geometry()
         self._apply_theme()
 
         central = QWidget()
+        central.setMinimumSize(0, 0)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -119,12 +126,12 @@ class MainWindow(QMainWindow):
             on_send=self._handle_broadcast_send,
             on_close=lambda: self._focus_guard.schedule_focus_active_pane(),
         )
+        # Floating overlay toast (never added to QVBoxLayout so it never shifts viewport height).
         self._toast = ToastBanner(self)
 
         layout.addWidget(self._top_bar)
         layout.addWidget(self._stack, stretch=1)
         layout.addWidget(self._draft_composer)
-        layout.addWidget(self._toast)
         self.setCentralWidget(central)
 
         self._focus_guard = FocusGuard(self._focus_active_pane, parent=self)
@@ -135,8 +142,25 @@ class MainWindow(QMainWindow):
         self._lifecycle_timer.timeout.connect(self._tick_lifecycle)
         self._lifecycle_timer.start(LIFECYCLE_POLL_MS)
 
-        # Defer heavy QtWebEngine initialization until immediately after first window paint (C3).
         QTimer.singleShot(0, self._bootstrap_workspace)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        # Re-clamp once OS window frame/titlebar margins are realized so bottom never clips.
+        QTimer.singleShot(0, self._clamp_to_active_screen)
+        if not self._screen_hooked and self.windowHandle() is not None:
+            self._screen_hooked = True
+            self.windowHandle().screenChanged.connect(lambda _s: self._clamp_to_active_screen())
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if self._toast.isVisible():
+            self._toast.reposition()
+
+    def _clamp_to_active_screen(self) -> None:
+        ensure_widget_on_screen(self)
+        if self._toast.isVisible():
+            self._toast.reposition()
 
     def _get_qt_factory(self) -> Any:
         if self._qt_engine_factory is None:
@@ -173,27 +197,49 @@ class MainWindow(QMainWindow):
         if space is None:
             return
         self._active_space_id = space.id
+        self._maximized_pane_id = None
         self._settings.last_space_id = space.id
         self._db.save_settings(self._settings)
 
-        waking_panes = self._lifecycle.activate_space(space.id)
+        waking_panes = set(self._lifecycle.activate_space(space.id))
         if not self._stack.show_space(space.id):
             tree = self._spaces.get_layout(space.id)
             self._stack.set_space_tree(space.id, tree, self._build_pane_frame)
-            panes = iter_panes(tree)
-            if panes:
-                self._set_active_pane(panes[0].pane_id)
 
-        for pane_id in waking_panes:
-            frame = self._stack.get_pane(pane_id)
-            if frame is not None:
-                snap = self._snapshots.get(pane_id)
+        # Always restore active pane inside the target Space (even when cached in SpaceStack).
+        space_panes = self._stack.panes_in_space(space.id)
+        remembered = self._last_pane_by_space.get(space.id)
+        valid_ids = {p.pane_id for p in space_panes}
+        if remembered in valid_ids:
+            self._set_active_pane(remembered)
+        elif space_panes:
+            self._set_active_pane(space_panes[0].pane_id)
+
+        # Wake any Frozen or Discarded panes cleanly.
+        for frame in space_panes:
+            if frame._engine is not None and hasattr(frame._engine, "set_lifecycle_tier"):
+                frame._engine.set_lifecycle_tier(LifecycleTier.LIVE)
+            if frame.pane_id in waking_panes:
+                snap = self._snapshots.get(frame.pane_id)
                 if snap:
                     frame.show_snapshot_preview(snap)
-                frame.reload()
+                frame.reload(keep_snapshot=bool(snap))
 
         self._refresh_top_bar()
         self._focus_guard.schedule_focus_active_pane()
+
+    def _switch_space_relative(self, delta: int) -> None:
+        spaces = self._spaces.list_spaces()
+        if len(spaces) < 2:
+            return
+        ids = [s.id for s in spaces]
+        current_idx = ids.index(self._active_space_id) if self._active_space_id in ids else 0
+        self.switch_space(ids[(current_idx + delta) % len(ids)])
+
+    def _switch_space_by_index(self, index: int) -> None:
+        spaces = self._spaces.list_spaces()
+        if 0 <= index < len(spaces):
+            self.switch_space(spaces[index].id)
 
     def create_new_space(self) -> None:
         count = len(self._spaces.list_spaces()) + 1
@@ -201,7 +247,6 @@ class MainWindow(QMainWindow):
         self.switch_space(space.id)
 
     def request_delete_space(self, space_id: str) -> None:
-        """Delete a Space with optional confirmation dialog and 'Do not show this again' toggle."""
         spaces = self._spaces.list_spaces()
         if len(spaces) <= 1:
             self._toast.show_message("You need at least one Space.")
@@ -223,6 +268,7 @@ class MainWindow(QMainWindow):
             next_space_id = remaining[0].id
 
         disposed_pane_ids = self._stack.remove_space(space_id)
+        self._last_pane_by_space.pop(space_id, None)
         for pane_id in disposed_pane_ids:
             self._lifecycle.unregister_pane(pane_id)
             self._snapshots.remove(pane_id)
@@ -237,7 +283,6 @@ class MainWindow(QMainWindow):
         self._toast.show_message(f'Deleted Space "{target.name}".')
 
     def _confirm_delete_space_dialog(self, space_name: str) -> bool:
-        """Prompt user with 'Yes, delete' / 'No, don't delete' and 'Do not show this again'."""
         box = QMessageBox(self)
         box.setWindowTitle("Delete Space")
         box.setIcon(QMessageBox.Icon.Question)
@@ -277,6 +322,7 @@ class MainWindow(QMainWindow):
             on_toggle_keep_running=self._handle_toggle_keep_running,
             on_switch_engine=self._switch_pane_engine,
             on_rename_account=self._handle_rename_account,
+            on_zoom_changed=self._handle_zoom_changed,
         )
         frame.set_header_visible(not self._focus_mode)
 
@@ -301,7 +347,6 @@ class MainWindow(QMainWindow):
                 ),
             )
             frame.set_content_widget(card, engine=self._companion)
-            # Only auto-launch if not already running (prevents duplicate windows on Space rebuild).
             if not self._companion.is_running(account.id):
                 self._companion.launch(account)
         else:
@@ -312,6 +357,7 @@ class MainWindow(QMainWindow):
                 on_google_blocked=frame.show_google_block_card,
                 on_crashed=frame.show_crash_card,
                 on_signed_out_changed=frame.set_signed_out_hint,
+                on_load_finished=frame.handle_load_finished,
             )
             frame.set_content_widget(pane_engine.widget, engine=pane_engine)
             self._lifecycle.register_pane(
@@ -334,40 +380,38 @@ class MainWindow(QMainWindow):
             self._toast.show_message(str(exc))
             return
         self._spaces.assign_account(self._active_space_id, pane_id, account.id)
-        self._rebuild_active_space()
+        self._rebuild_space(self._active_space_id)
 
     def _assign_existing(self, pane_id: str, account_id: str, move_from_other: bool) -> None:
         if move_from_other:
             for space, other_pane_id in self._spaces.find_open_account_locations(account_id):
                 self._spaces.assign_account(space.id, other_pane_id, None)
         self._spaces.assign_account(self._active_space_id, pane_id, account_id)
-        self._rebuild_active_space()
+        self._rebuild_space(self._active_space_id)
 
     def _switch_pane_engine(self, pane_id: str, engine: EngineKind) -> None:
         frame = self._stack.get_pane(pane_id)
         if frame is None or frame.account is None:
             return
         self._accounts.switch_engine(frame.account.id, engine)
-        self._rebuild_active_space()
+        self._rebuild_space(self._active_space_id)
 
     def _handle_rename_space(self, space_id: str, new_name: str) -> None:
-        """Persist the new Space name and refresh the top bar."""
         updated = self._spaces.rename_space(space_id, new_name)
         if updated is not None:
             self._refresh_top_bar()
             self._toast.show_message(f'Renamed Space to "{updated.name}".')
 
     def _handle_rename_account(self, account_id: str, new_label: str) -> None:
-        """Persist the new account label; the pane header is already updated optimistically."""
         self._accounts.rename_account(account_id, new_label)
 
-    def _handle_switch_companion(self, pane_id: str) -> None:
-        self._switch_pane_engine(pane_id, EngineKind.COMPANION)
+    def _handle_zoom_changed(self, account_id: str, zoom: float) -> None:
+        self._accounts.set_zoom(account_id, zoom)
 
     def _handle_split_pane(self, pane_id: str, orientation: Orientation) -> None:
         created = self._spaces.split_pane_in_space(self._active_space_id, pane_id, orientation)
         if created is not None:
-            self._rebuild_active_space()
+            self._rebuild_space(self._active_space_id)
             self._set_active_pane(created.pane_id)
 
     def _handle_close_pane(self, pane_id: str) -> None:
@@ -377,7 +421,8 @@ class MainWindow(QMainWindow):
         if snapshot is None:
             return
         self._lifecycle.unregister_pane(pane_id)
-        self._rebuild_active_space()
+        self._snapshots.remove(pane_id)
+        self._rebuild_space(self._active_space_id)
         self._toast.show_message(
             f"Closed {label}",
             action_label="Undo (Ctrl+Shift+T)",
@@ -386,8 +431,11 @@ class MainWindow(QMainWindow):
 
     def _undo_close_pane(self) -> None:
         restored = self._spaces.undo_last_close()
-        if restored is not None:
-            self._rebuild_active_space()
+        if restored is None:
+            return
+        self._rebuild_space(restored.space_id)
+        if restored.space_id != self._active_space_id:
+            self.switch_space(restored.space_id)
 
     def _handle_toggle_keep_running(self, pane_id: str, keep_running: bool) -> None:
         frame = self._stack.get_pane(pane_id)
@@ -398,21 +446,30 @@ class MainWindow(QMainWindow):
     def _handle_layout_resized(self, space_id: str, root: Any) -> None:
         self._spaces.save_layout(space_id, root)
 
-    def _rebuild_active_space(self) -> None:
-        tree = self._spaces.get_layout(self._active_space_id)
-        self._stack.set_space_tree(self._active_space_id, tree, self._build_pane_frame)
-        panes = iter_panes(tree)
-        if panes:
-            self._set_active_pane(panes[0].pane_id)
+    def _rebuild_space(self, space_id: str) -> None:
+        tree = self._spaces.get_layout(space_id)
+        self._stack.set_space_tree(space_id, tree, self._build_pane_frame)
+        if space_id == self._active_space_id:
+            panes = iter_panes(tree)
+            if panes:
+                self._set_active_pane(panes[0].pane_id)
 
     def _set_active_pane(self, pane_id: str) -> None:
         self._active_pane_id = pane_id
-        for frame in self._stack.all_panes():
+        if self._active_space_id:
+            self._last_pane_by_space[self._active_space_id] = pane_id
+        for frame in self._stack.panes_in_space(self._active_space_id):
             frame.set_active(frame.pane_id == pane_id)
 
     def _focus_active_pane(self) -> bool:
         frame = self._stack.get_pane(self._active_pane_id)
         return frame.focus_input() if frame is not None else False
+
+    def _active_provider_quirks(self) -> tuple[str, ...]:
+        frame = self._stack.get_pane(self._active_pane_id)
+        if frame is None or frame.account is None:
+            return ()
+        return self._presets.get(frame.account.provider_key).quirks
 
     def _on_pane_activity(self, pane_id: str) -> None:
         if self._lifecycle.record_activity(pane_id):
@@ -428,6 +485,20 @@ class MainWindow(QMainWindow):
                 self._snapshots.put(pane_id, frame._engine.grab_snapshot_png())
             if hasattr(frame._engine, "set_lifecycle_tier"):
                 frame._engine.set_lifecycle_tier(tier)
+
+        self._lifecycle_tick_count += 1
+        if self._lifecycle_tick_count % RAM_CHECK_EVERY_N_TICKS == 0:
+            sample = self._memory.sample()
+            if self._memory.should_warn(sample) and not self._ram_warned:
+                self._ram_warned = True
+                self._toast.show_message(
+                    f"Using {sample.total_rss_mb:.0f} MB RAM",
+                    action_label="Freeze other Spaces",
+                    on_action=self._freeze_other_spaces,
+                    duration_ms=8000,
+                )
+            elif not self._memory.should_warn(sample):
+                self._ram_warned = False
 
     def _freeze_other_spaces(self) -> None:
         transitions = self._lifecycle.freeze_other_spaces(self._active_space_id)
@@ -462,8 +533,12 @@ class MainWindow(QMainWindow):
                 "Ctrl+Shift+\\",
                 lambda: self._handle_split_pane(self._active_pane_id, Orientation.VERTICAL),
             ),
+            PaletteCommand(
+                "Maximize / Restore Pane", "Ctrl+Shift+Enter", self.toggle_maximize_pane
+            ),
             PaletteCommand("Toggle Focus Mode", "", self.toggle_focus_mode),
             PaletteCommand("Open Draft Composer", "Ctrl+Shift+B", self.open_draft_composer),
+            PaletteCommand("Paste Clipboard to All Panes", "Ctrl+Shift+V", self._paste_to_all),
             PaletteCommand("Freeze other Spaces", "", self._freeze_other_spaces),
             PaletteCommand("Undo Close Pane", "Ctrl+Shift+T", self._undo_close_pane),
             PaletteCommand("Open Settings", "Ctrl+,", self.open_settings),
@@ -483,10 +558,26 @@ class MainWindow(QMainWindow):
     def open_draft_composer(self) -> None:
         targets = [
             (f.pane_id, f.account.label)
-            for f in self._stack.all_panes()
+            for f in self._stack.panes_in_space(self._active_space_id)
             if f.account is not None
         ]
         self._draft_composer.open_composer(targets)
+
+    def _paste_to_all(self) -> None:
+        cb = QApplication.clipboard()
+        text = cb.text().strip() if cb is not None else ""
+        if not text:
+            self._toast.show_message("Clipboard is empty.")
+            return
+        frames = [
+            f
+            for f in self._stack.panes_in_space(self._active_space_id)
+            if f.account is not None
+        ]
+        if not frames:
+            return
+        result = self._send_service.send_text(text, frames)  # type: ignore[arg-type]
+        self._toast.show_message(f"Pasted to {len(result.pasted_pane_ids)} pane(s).")
 
     def _handle_broadcast_send(self, text: str, pane_ids: list[str]) -> None:
         frames = [
@@ -502,6 +593,20 @@ class MainWindow(QMainWindow):
             self._draft_composer.set_status(
                 f"Pasted to {len(result.pasted_pane_ids)} pane(s). Clipboard restored."
             )
+
+    def toggle_maximize_pane(self) -> None:
+        """Temporarily hide sibling panes in the active Space to focus on one pane."""
+        panes = self._stack.panes_in_space(self._active_space_id)
+        if len(panes) <= 1:
+            return
+        if self._maximized_pane_id == self._active_pane_id:
+            self._maximized_pane_id = None
+            for frame in panes:
+                frame.setVisible(True)
+        else:
+            self._maximized_pane_id = self._active_pane_id
+            for frame in panes:
+                frame.setVisible(frame.pane_id == self._active_pane_id)
 
     def toggle_focus_mode(self) -> None:
         self._focus_mode = not self._focus_mode
@@ -530,11 +635,7 @@ class MainWindow(QMainWindow):
                 self._qt_engine_factory.set_download_dir(self._settings.download_dir)
 
     def _handle_download_started(self, filename: str, folder: str) -> None:
-        """Show a toast when a file download is accepted and saved to disk."""
-        self._toast.show_message(
-            f'Downloading "{filename}" to {folder}',
-            duration_ms=7000,
-        )
+        self._toast.show_message(f'Downloading "{filename}" to {folder}', duration_ms=7000)
 
     def _apply_theme(self) -> None:
         if self._settings.theme == ThemeMode.LIGHT:
@@ -543,9 +644,7 @@ class MainWindow(QMainWindow):
             self._tokens = DARK_TOKENS
         else:
             scheme = QApplication.styleHints().colorScheme()
-            self._tokens = (
-                LIGHT_TOKENS if scheme == Qt.ColorScheme.Light else DARK_TOKENS
-            )
+            self._tokens = LIGHT_TOKENS if scheme == Qt.ColorScheme.Light else DARK_TOKENS
         self.setStyleSheet(build_qss(self._tokens))
         if self._qt_engine_factory is not None:
             self._qt_engine_factory.set_background_hex(self._tokens.bg)
@@ -554,12 +653,19 @@ class MainWindow(QMainWindow):
         bindings = {
             "command_palette": self.open_command_palette,
             "new_space": self.create_new_space,
+            "next_space": lambda: self._switch_space_relative(1),
+            "prev_space": lambda: self._switch_space_relative(-1),
+            "maximize_pane": self.toggle_maximize_pane,
             "close_pane": lambda: self._handle_close_pane(self._active_pane_id),
             "undo_close_pane": self._undo_close_pane,
             "draft_composer": self.open_draft_composer,
+            "paste_to_all": self._paste_to_all,
             "settings": self.open_settings,
             "find_in_page": self._open_active_find,
             "reload_pane": self._reload_active_pane,
+            "zoom_in": lambda: self._zoom_active_pane(ZOOM_STEP),
+            "zoom_out": lambda: self._zoom_active_pane(-ZOOM_STEP),
+            "zoom_reset": self._reset_active_zoom,
             "split_right": lambda: self._handle_split_pane(
                 self._active_pane_id, Orientation.HORIZONTAL
             ),
@@ -573,9 +679,34 @@ class MainWindow(QMainWindow):
                 sc = QShortcut(QKeySequence(seq), self)
                 sc.activated.connect(
                     lambda act=action, cb=callback: (
-                        cb() if self._shortcuts.should_intercept(act) else None
+                        cb()
+                        if self._shortcuts.should_intercept(
+                            act, active_provider_quirks=self._active_provider_quirks()
+                        )
+                        else None
                     )
                 )
+
+        # Ctrl+1..9 direct Space switching
+        for idx in range(9):
+            sc = QShortcut(QKeySequence(f"Ctrl+{idx + 1}"), self)
+            sc.activated.connect(
+                lambda i=idx: (
+                    self._switch_space_by_index(i)
+                    if not self._shortcuts.pass_through_mode
+                    else None
+                )
+            )
+
+    def _zoom_active_pane(self, delta: float) -> None:
+        frame = self._stack.get_pane(self._active_pane_id)
+        if frame is not None:
+            frame.adjust_manual_zoom(delta)
+
+    def _reset_active_zoom(self) -> None:
+        frame = self._stack.get_pane(self._active_pane_id)
+        if frame is not None:
+            frame.reset_zoom(self._settings.zoom_mode)
 
     def _open_active_find(self) -> None:
         frame = self._stack.get_pane(self._active_pane_id)
@@ -592,7 +723,9 @@ class MainWindow(QMainWindow):
         saved = qsettings.value("window/geometry")
         if saved is not None:
             self.restoreGeometry(saved)  # type: ignore[arg-type]
-        ensure_widget_on_screen(self)
+            ensure_widget_on_screen(self, use_default_size_if_unset=False)
+        else:
+            ensure_widget_on_screen(self, use_default_size_if_unset=True)
 
     def _save_geometry(self) -> None:
         qsettings = QSettings("Kazu", "Kazu")

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -14,18 +14,21 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from kazu.controllers.autofit import AutoFitZoomService
-from kazu.domain.models import Account, EngineKind, Orientation, ZoomMode
+from kazu.domain.models import Account, EngineKind, Orientation, ZoomMode, clamp_zoom
 from kazu.ui.block_card import build_crash_card, build_google_block_card
 from kazu.ui.find_bar import FindBar
 from kazu.ui.theme.tokens import ACCOUNT_DOT_HEX
 
 MIN_RESIZE_WIDTH_FOR_ZOOM: int = 200
+ZOOM_DEBOUNCE_MS: int = 40
+ZOOM_EPSILON: float = 0.005
 
 
 class PaneFrame(QFrame):
@@ -44,6 +47,7 @@ class PaneFrame(QFrame):
         on_toggle_keep_running: Callable[[str, bool], None] | None = None,
         on_switch_engine: Callable[[str, EngineKind], None] | None = None,
         on_rename_account: Callable[[str, str], None] | None = None,
+        on_zoom_changed: Callable[[str, float], None] | None = None,
         on_switch_companion: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -59,16 +63,46 @@ class PaneFrame(QFrame):
         self._on_toggle_keep_running = on_toggle_keep_running
         self._on_rename_account = on_rename_account
         self._on_switch_engine = on_switch_engine
+        self._on_zoom_changed = on_zoom_changed
         self._on_switch_companion = on_switch_companion
         self._engine: Any = None
         self._content_widget: QWidget | None = None
         self._overlay_card: QWidget | None = None
+        self._last_applied_zoom: float | None = None
+
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.timeout.connect(self._apply_autofit_zoom)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 26px Pane Header
+        root.addWidget(self._build_header(account))
+
+        self._find_bar = FindBar(
+            on_search=self._handle_find,
+            on_close=self._close_find_bar,
+            parent=self,
+        )
+        root.addWidget(self._find_bar)
+
+        self._stack = QStackedWidget()
+        self._stack.setMinimumSize(0, 0)
+        self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        root.addWidget(self._stack, stretch=1)
+
+        # Ignored policy prevents snapshot QPixmap from ever inflating MainWindow's min height.
+        self._snapshot_label = QLabel("Waking up...")
+        self._snapshot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._snapshot_label.setMinimumSize(0, 0)
+        self._snapshot_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._stack.addWidget(self._snapshot_label)
+
+    def _build_header(self, account: Account | None) -> QFrame:
         self._header = QFrame()
         self._header.setObjectName("PaneHeader")
         h_layout = QHBoxLayout(self._header)
@@ -104,32 +138,37 @@ class PaneFrame(QFrame):
         h_layout.addStretch(1)
         h_layout.addWidget(self._pin_btn)
         h_layout.addWidget(self._menu_btn)
-        root.addWidget(self._header)
-
-        # Inline FindBar (hidden until Ctrl+F)
-        self._find_bar = FindBar(
-            on_search=self._handle_find,
-            on_close=self._close_find_bar,
-            parent=self,
-        )
-        root.addWidget(self._find_bar)
-
-        # Stacked content: snapshot wake preview / primary view / single overlay card
-        self._stack = QStackedWidget()
-        root.addWidget(self._stack, stretch=1)
-
-        self._snapshot_label = QLabel("Waking up...")
-        self._snapshot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._stack.addWidget(self._snapshot_label)
+        return self._header
 
     def set_header_visible(self, visible: bool) -> None:
-        """Toggle pane header for Focus mode (§8.1)."""
         self._header.setVisible(visible)
 
     def set_zoom_mode(self, mode: ZoomMode) -> None:
-        """Apply updated zoom mode immediately."""
         self._zoom_mode = mode
+        self._last_applied_zoom = None
         self._apply_autofit_zoom()
+
+    def adjust_manual_zoom(self, delta: float) -> None:
+        """Step manual zoom up/down (Ctrl+= / Ctrl+-) and persist via callback."""
+        if self.account is None:
+            return
+        new_zoom = clamp_zoom(self.account.zoom + delta)
+        self.account.zoom = new_zoom
+        self._zoom_mode = ZoomMode.NATIVE_NARROW
+        self._last_applied_zoom = None
+        if self._engine is not None and hasattr(self._engine, "set_zoom"):
+            self._engine.set_zoom(new_zoom)
+            self._last_applied_zoom = new_zoom
+        if self._on_zoom_changed is not None:
+            self._on_zoom_changed(self.account.id, new_zoom)
+
+    def reset_zoom(self, default_mode: ZoomMode) -> None:
+        """Reset zoom to 1.0 / configured zoom mode (Ctrl+0)."""
+        if self.account is not None:
+            self.account.zoom = 1.0
+            if self._on_zoom_changed is not None:
+                self._on_zoom_changed(self.account.id, 1.0)
+        self.set_zoom_mode(default_mode)
 
     def set_active(self, active: bool) -> None:
         self._header.setProperty("active", "true" if active else "false")
@@ -146,6 +185,7 @@ class PaneFrame(QFrame):
         self._clear_overlay_card()
         self._engine = engine
         self._content_widget = widget
+        widget.setMinimumSize(0, 0)
         self._stack.addWidget(widget)
         self._stack.setCurrentWidget(widget)
 
@@ -167,13 +207,25 @@ class PaneFrame(QFrame):
             self._snapshot_label.setPixmap(
                 pixmap.scaled(
                     self._stack.size(),
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
         else:
             self._snapshot_label.setText("Waking up...")
         self._stack.setCurrentWidget(self._snapshot_label)
+
+    def handle_load_finished(self, ok: bool) -> None:
+        """Re-apply AutoFitZoom after login/navigation and swap snapshot back to live view."""
+        if (
+            self._content_widget is not None
+            and self._stack.currentWidget() is self._snapshot_label
+        ):
+            self._snapshot_label.clear()
+            self._stack.setCurrentWidget(self._content_widget)
+        if ok:
+            self._last_applied_zoom = None
+            self._apply_autofit_zoom()
 
     def show_google_block_card(self) -> None:
         card = build_google_block_card(
@@ -202,9 +254,9 @@ class PaneFrame(QFrame):
         ):
             self._engine.load_url(self.account.home_url)
 
-    def reload(self) -> None:
+    def reload(self, *, keep_snapshot: bool = False) -> None:
         self._clear_overlay_card()
-        if self._content_widget is not None:
+        if not keep_snapshot and self._content_widget is not None:
             self._stack.setCurrentWidget(self._content_widget)
         if self._engine is not None and hasattr(self._engine, "reload"):
             self._engine.reload()
@@ -220,6 +272,7 @@ class PaneFrame(QFrame):
             self._engine.trigger_paste()
 
     def dispose(self) -> None:
+        self._zoom_timer.stop()
         self._clear_overlay_card()
         if self._engine is not None and hasattr(self._engine, "dispose"):
             self._engine.dispose()
@@ -232,29 +285,35 @@ class PaneFrame(QFrame):
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        self._apply_autofit_zoom()
+        self._zoom_timer.start(ZOOM_DEBOUNCE_MS)
 
     def _apply_autofit_zoom(self) -> None:
         if (
-            self.width() >= MIN_RESIZE_WIDTH_FOR_ZOOM
-            and self._engine is not None
-            and hasattr(self._engine, "set_zoom")
-            and self.account is not None
+            self.width() < MIN_RESIZE_WIDTH_FOR_ZOOM
+            or self._engine is None
+            or not hasattr(self._engine, "set_zoom")
+            or self.account is None
         ):
-            result = self._autofit.compute(
-                pane_width_px=self.width(),
-                target_css_width=self._target_css_width,
-                mode=self._zoom_mode,
-                manual_zoom=self.account.zoom,
-            )
-            self._engine.set_zoom(result.zoom)
+            return
+        result = self._autofit.compute(
+            pane_width_px=self.width(),
+            target_css_width=self._target_css_width,
+            mode=self._zoom_mode,
+            manual_zoom=self.account.zoom,
+        )
+        if (
+            self._last_applied_zoom is not None
+            and abs(self._last_applied_zoom - result.zoom) < ZOOM_EPSILON
+        ):
+            return
+        self._engine.set_zoom(result.zoom)
+        self._last_applied_zoom = result.zoom
 
     def _handle_find(self, query: str) -> None:
         if self._engine is not None and hasattr(self._engine, "find_text"):
             self._engine.find_text(query)
 
     def _close_find_bar(self) -> None:
-        """Close the find bar and return focus to the pane content."""
         self.focus_input()
 
     def _handle_pin_toggled(self, checked: bool) -> None:
@@ -263,7 +322,6 @@ class PaneFrame(QFrame):
             self._on_toggle_keep_running(self.pane_id, checked)
 
     def _request_switch_engine(self, target: EngineKind) -> None:
-        """Route engine-switch requests through on_switch_engine or legacy on_switch_companion."""
         if self._on_switch_engine is not None:
             self._on_switch_engine(self.pane_id, target)
         elif target == EngineKind.COMPANION and self._on_switch_companion is not None:
@@ -296,14 +354,8 @@ class PaneFrame(QFrame):
         menu.addSeparator()
         if self._on_split is not None:
             split_fn = self._on_split
-            menu.addAction(
-                "Split Right",
-                lambda: split_fn(self.pane_id, Orientation.HORIZONTAL),
-            )
-            menu.addAction(
-                "Split Down",
-                lambda: split_fn(self.pane_id, Orientation.VERTICAL),
-            )
+            menu.addAction("Split Right", lambda: split_fn(self.pane_id, Orientation.HORIZONTAL))
+            menu.addAction("Split Down", lambda: split_fn(self.pane_id, Orientation.VERTICAL))
         menu.addSeparator()
         if self._on_close is not None:
             close_fn = self._on_close
@@ -311,7 +363,6 @@ class PaneFrame(QFrame):
         menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
 
     def _handle_rename_account(self) -> None:
-        """Prompt the user for a new label and update both DB and in-memory Account."""
         if self.account is None or self._on_rename_account is None:
             return
         new_label, ok = QInputDialog.getText(

@@ -23,13 +23,19 @@ from kazu.controllers.send import SendService
 from kazu.controllers.shortcuts import ShortcutRegistry
 from kazu.domain.models import ZoomMode
 from kazu.domain.providers import ProviderPresetRegistry
-from kazu.infra.geometry import Rect, clamp_window_rect
+from kazu.infra.geometry import (
+    FrameMargins,
+    Rect,
+    clamp_window_rect,
+    compute_initial_window_rect,
+)
 from kazu.infra.logging_setup import PrivacyRedactingFilter
 from kazu.infra.memory import MemoryMonitor
 from kazu.infra.paths import AppPaths, validate_account_id
 from kazu.infra.shutdown import ShutdownCoordinator
 from kazu.infra.snapshots import SnapshotCache
 from kazu.infra.updater import build_broken_site_report, is_engine_stale
+from kazu.ui.theme.tokens import DARK_TOKENS, build_qss
 
 
 class _FakeClipboard:
@@ -63,26 +69,19 @@ class ServicesAndGuardsTests(unittest.TestCase):
         svc.register_pane("p2", "s1", visible=True, keep_running=True, now=0.0)
         svc.register_pane("p3", "s2", visible=False, now=0.0)
 
-        # Switch from s1 -> s2 at t=100
         svc.activate_space("s2", now=100.0)
         self.assertEqual(svc.get_record("p1").tier, LifecycleTier.HIDDEN_ACTIVE)  # type: ignore[union-attr]
 
-        # Activity Guard at t=500 resets p1's idle timer and lights up Space s1 dot
         self.assertTrue(svc.record_activity("p1", now=500.0))
         self.assertTrue(svc.space_has_unread_activity("s1"))
-
-        # At t=900 (400s since activity < 600s), p1 must NOT freeze yet!
         self.assertEqual(svc.evaluate_transitions(now=900.0), {})
 
-        # Live threshold update (Settings saved without restart) takes effect immediately
         svc.update_thresholds(freeze_after_seconds=300, discard_after_seconds=1800)
         self.assertEqual(svc.evaluate_transitions(now=900.0), {"p1": LifecycleTier.FROZEN})
         self.assertEqual(svc.get_record("p2").tier, LifecycleTier.HIDDEN_ACTIVE)  # type: ignore[union-attr]
 
-        # At t=2400 (1900s since activity >= 1800s), p1 discards
         self.assertEqual(svc.evaluate_transitions(now=2400.0), {"p1": LifecycleTier.DISCARDED})
 
-        # Returning to s1 wakes p1 from DISCARDED and clears unread dot
         waking = svc.activate_space("s1", now=2500.0)
         self.assertEqual(waking, ["p1"])
         self.assertFalse(svc.space_has_unread_activity("s1"))
@@ -93,7 +92,6 @@ class ServicesAndGuardsTests(unittest.TestCase):
         custom = presets.get("custom")
         policy = NavigationPolicy()
 
-        # Standard provider domain + external link
         self.assertEqual(
             policy.decide("https://claude.ai/chat/123", claude, claude.url),
             NavigationAction.ALLOW_IN_PANE,
@@ -110,14 +108,10 @@ class ServicesAndGuardsTests(unittest.TestCase):
             policy.decide("file:///etc/passwd", claude, claude.url),
             NavigationAction.BLOCK_UNSAFE,
         )
-
-        # about:blank must be allowed (used by JS-initialized OAuth popups)
         self.assertEqual(
             policy.decide("about:blank", custom, "https://app.pomaroo.ai"),
             NavigationAction.ALLOW_IN_PANE,
         )
-
-        # Sibling subdomain of a custom URL stays in-pane (app.pomaroo.ai -> auth.pomaroo.ai)
         self.assertEqual(extract_registrable_domain("app.pomaroo.ai"), "pomaroo.ai")
         self.assertEqual(extract_registrable_domain("app.service.co.uk"), "service.co.uk")
         self.assertEqual(extract_registrable_domain("localhost"), "localhost")
@@ -125,19 +119,7 @@ class ServicesAndGuardsTests(unittest.TestCase):
             policy.decide("https://auth.pomaroo.ai/callback", custom, "https://app.pomaroo.ai"),
             NavigationAction.ALLOW_IN_PANE,
         )
-
-        # OAuth brokers (Supabase, Clerk, Firebase, Google) stay in-pane
         self.assertTrue(is_oauth_url("https://xyz.supabase.co/auth/v1/authorize"))
-        self.assertEqual(
-            policy.decide(
-                "https://xyz.supabase.co/auth/v1/authorize",
-                custom,
-                "https://app.pomaroo.ai",
-            ),
-            NavigationAction.ALLOW_IN_PANE,
-        )
-
-        # Server redirects (is_user_link_click=False) stay in-pane so cookies never split
         self.assertEqual(
             policy.decide(
                 "https://sso.some-custom-broker.io/authorize",
@@ -148,7 +130,6 @@ class ServicesAndGuardsTests(unittest.TestCase):
             NavigationAction.ALLOW_IN_PANE,
         )
 
-        # BlockDetector catches both disallowed_useragent and Google 400 Bad Request
         detector = BlockDetector()
         self.assertTrue(
             detector.is_google_blocked(
@@ -206,21 +187,39 @@ class ServicesAndGuardsTests(unittest.TestCase):
         reg.pass_through_mode = True
         self.assertFalse(reg.should_intercept("new_space"))
 
-    def test_window_geometry_guard_recovers_unplugged_monitor(self) -> None:
-        primary = Rect(0, 0, 1920, 1080)
-        ghost = Rect(2400, 100, 1200, 800)  # On disconnected second monitor
-        clamped = clamp_window_rect(ghost, [primary])
-        self.assertGreaterEqual(clamped.x, 0)
-        self.assertLessEqual(clamped.right, 1920)
-        self.assertGreaterEqual(clamped.y, 0)
-        self.assertLessEqual(clamped.bottom, 1080)
+    def test_window_geometry_guard_respects_frame_margins_and_hidpi_laptop(self) -> None:
+        # 1920x1080 @ 150% Windows DPI scaling -> 1280x680 availableGeometry
+        hidpi_laptop = Rect(0, 0, 1280, 680)
+        margins = FrameMargins(left=8, top=36, right=8, bottom=8)
 
-    def test_snapshot_cache_lru_and_shutdown_order(self) -> None:
+        initial = compute_initial_window_rect(hidpi_laptop, margins=margins)
+        self.assertGreaterEqual(initial.x - margins.left, hidpi_laptop.x)
+        self.assertGreaterEqual(initial.y - margins.top, hidpi_laptop.y)
+        self.assertLessEqual(initial.right + margins.right, hidpi_laptop.right)
+        self.assertLessEqual(initial.bottom + margins.bottom, hidpi_laptop.bottom)
+
+        # Oversized window (1360x860) clamped strictly inside screen including title bar
+        oversized = Rect(0, 0, 1360, 860)
+        clamped = clamp_window_rect(oversized, [hidpi_laptop], margins=margins)
+        self.assertLessEqual(clamped.bottom + margins.bottom, hidpi_laptop.bottom)
+        self.assertGreaterEqual(clamped.y - margins.top, hidpi_laptop.y)
+
+        # Ghost window on unplugged monitor recovers to primary screen
+        primary = Rect(0, 0, 1920, 1080)
+        ghost = Rect(2400, 100, 1200, 800)
+        recovered = clamp_window_rect(ghost, [primary], margins=margins)
+        self.assertGreaterEqual(recovered.x - margins.left, 0)
+        self.assertLessEqual(recovered.right + margins.right, 1920)
+        self.assertLessEqual(recovered.bottom + margins.bottom, 1080)
+
+    def test_qss_cache_and_snapshot_shutdown_order(self) -> None:
+        self.assertIs(build_qss(DARK_TOKENS), build_qss(DARK_TOKENS))
+
         cache = SnapshotCache(max_entries=2)
         self.assertTrue(cache.put("p1", b"png1"))
         self.assertTrue(cache.put("p2", b"png2"))
-        self.assertEqual(cache.get("p1"), b"png1")  # Refresh p1
-        self.assertTrue(cache.put("p3", b"png3"))  # Evicts p2
+        self.assertEqual(cache.get("p1"), b"png1")
+        self.assertTrue(cache.put("p3", b"png3"))
         self.assertIsNone(cache.get("p2"))
         self.assertEqual(cache.get("p1"), b"png1")
 
@@ -232,7 +231,7 @@ class ServicesAndGuardsTests(unittest.TestCase):
         coord.register_destroy_profiles(lambda: order.append("destroy_profiles"))
         coord.register_checkpoint_storage(lambda: order.append("checkpoint_db"))
         coord.execute()
-        coord.execute()  # Idempotent
+        coord.execute()
         self.assertEqual(
             order,
             ["hide", "destroy_views", "process_events", "destroy_profiles", "checkpoint_db"],

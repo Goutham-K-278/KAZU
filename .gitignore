@@ -4,15 +4,21 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 htmlcov/
 .coverage
+.coverage.*
+.cache/
 
 # Build & packaging
 dist/
 build/
+deb_build/
+dmg_stage/
+packaging/windows/Output/
 *.egg-info/
 *.dmg
 *.exe
@@ -23,9 +29,21 @@ build/
 # Local secrets & user data
 .env
 .env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.cert
+*.crt
+*.secret
+*.token
+secrets/
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 profiles/
 companion/
 logs/
@@ -37,6 +55,7 @@ code-doc.md
 
 # Agent scratch & temporary
 brain/
+scratch/
 *.tmp
 *.bak
 
@@ -46,7 +65,10 @@ brain/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini

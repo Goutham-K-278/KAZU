@@ -1,4 +1,4 @@
-"""SQLite persistence with PRAGMA user_version ordered migrations.
+"""SQLite persistence with PRAGMA user_version ordered migrations and tuned WAL performance.
 
 All queries use parameterized bindings. UI widgets never access this module
 directly — controllers mediate all reads and writes.
@@ -24,6 +24,8 @@ from kazu.domain.models import (
 )
 
 CURRENT_SCHEMA_VERSION: int = 1
+SQLITE_BUSY_TIMEOUT_MS: int = 3000
+SQLITE_CACHE_SIZE_KB: int = -8000  # 8 MB in-memory page cache
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -54,6 +56,8 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_spaces_order ON spaces (order_index);
         """
     )
 
@@ -64,7 +68,7 @@ MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = (
 
 
 class Database:
-    """Thread-safe-by-convention SQLite repository for Kazu."""
+    """SQLite repository for Kazu with WAL tuning and batched settings persistence."""
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
@@ -72,6 +76,10 @@ class Database:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute("PRAGMA synchronous=NORMAL;")
+        self._conn.execute("PRAGMA temp_store=MEMORY;")
+        self._conn.execute(f"PRAGMA cache_size={SQLITE_CACHE_SIZE_KB};")
+        self._conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS};")
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._run_migrations()
 
@@ -188,11 +196,10 @@ class Database:
 
     def reorder_spaces(self, ordered_ids: list[str]) -> None:
         with self._conn:
-            for index, space_id in enumerate(ordered_ids):
-                self._conn.execute(
-                    "UPDATE spaces SET order_index = ? WHERE id = ?",
-                    (index, space_id),
-                )
+            self._conn.executemany(
+                "UPDATE spaces SET order_index = ? WHERE id = ?",
+                [(index, space_id) for index, space_id in enumerate(ordered_ids)],
+            )
 
     # --- Settings ---
 
@@ -207,36 +214,51 @@ class Database:
 
         defaults = AppSettings()
         return AppSettings(
-            restore_last_session=bool(raw.get("restore_last_session", defaults.restore_last_session)),  # noqa: E501
+            restore_last_session=bool(
+                raw.get("restore_last_session", defaults.restore_last_session)
+            ),
             launch_on_login=bool(raw.get("launch_on_login", defaults.launch_on_login)),
             close_to_tray=bool(raw.get("close_to_tray", defaults.close_to_tray)),
-            confirm_delete_space=bool(raw.get("confirm_delete_space", defaults.confirm_delete_space)),  # noqa: E501
+            confirm_delete_space=bool(
+                raw.get("confirm_delete_space", defaults.confirm_delete_space)
+            ),
             theme=_safe_enum(ThemeMode, raw.get("theme"), defaults.theme),
             density=_safe_enum(DensityMode, raw.get("density"), defaults.density),
             accent_color=str(raw.get("accent_color", defaults.accent_color)),
             zoom_mode=_safe_enum(ZoomMode, raw.get("zoom_mode"), defaults.zoom_mode),
-            freeze_after_minutes=int(raw.get("freeze_after_minutes", defaults.freeze_after_minutes)),  # noqa: E501
-            discard_after_minutes=int(raw.get("discard_after_minutes", defaults.discard_after_minutes)),  # noqa: E501
-            show_memory_per_pane=bool(raw.get("show_memory_per_pane", defaults.show_memory_per_pane)),  # noqa: E501
+            freeze_after_minutes=int(
+                raw.get("freeze_after_minutes", defaults.freeze_after_minutes)
+            ),
+            discard_after_minutes=int(
+                raw.get("discard_after_minutes", defaults.discard_after_minutes)
+            ),
+            show_memory_per_pane=bool(
+                raw.get("show_memory_per_pane", defaults.show_memory_per_pane)
+            ),
             pass_through_mode=bool(raw.get("pass_through_mode", defaults.pass_through_mode)),
-            onboarding_completed=bool(raw.get("onboarding_completed", defaults.onboarding_completed)),  # noqa: E501
+            onboarding_completed=bool(
+                raw.get("onboarding_completed", defaults.onboarding_completed)
+            ),
             sync_folder=str(raw.get("sync_folder", defaults.sync_folder)),
             download_dir=str(raw.get("download_dir", defaults.download_dir)),
             last_space_id=str(raw.get("last_space_id", defaults.last_space_id)),
         )
 
     def save_settings(self, settings: AppSettings) -> None:
+        """Persist all settings in a single batched transaction."""
         data = asdict(settings)
+        rows = [
+            (key, json.dumps(value.value if hasattr(value, "value") else value))
+            for key, value in data.items()
+        ]
         with self._conn:
-            for key, value in data.items():
-                encoded = json.dumps(value.value if hasattr(value, "value") else value)
-                self._conn.execute(
-                    """
-                    INSERT INTO settings (key, value) VALUES (?, ?)
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                    """,
-                    (key, encoded),
-                )
+            self._conn.executemany(
+                """
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                rows,
+            )
 
     def checkpoint(self) -> None:
         """Flush WAL journal to main database file before clean shutdown."""

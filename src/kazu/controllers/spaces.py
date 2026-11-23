@@ -1,4 +1,4 @@
-"""Space & layout controller with Undo-close support and layout-only sync export."""
+"""Space & layout controller with bounded Undo-close support and layout-only sync export."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from kazu.domain.models import Orientation, Space, new_id
 from kazu.infra.db import Database
 
 UNDO_WINDOW_SECONDS: float = 5.0
+MAX_UNDO_HISTORY: int = 20
 SYNC_EXPORT_VERSION: int = 1
 SYNC_FILENAME: str = "kazu-layouts.json"
 
@@ -41,7 +42,7 @@ class ClosedPaneSnapshot:
 
 
 class SpaceController:
-    """Manages Spaces, layout mutations, duplicate-account detection, and Undo."""
+    """Manages Spaces, layout mutations, duplicate-account detection, and bounded Undo."""
 
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -98,6 +99,7 @@ class SpaceController:
         if len(spaces) <= 1:
             return False  # Never leave the user with zero Spaces.
         self._db.delete_space(space_id)
+        self._undo_stack = [s for s in self._undo_stack if s.space_id != space_id]
         remaining = [s.id for s in spaces if s.id != space_id]
         self._db.reorder_spaces(remaining)
         return True
@@ -139,7 +141,7 @@ class SpaceController:
         pane_id: str,
         now: float | None = None,
     ) -> ClosedPaneSnapshot | None:
-        """Close a pane and push an Undo snapshot so Ctrl+Shift+T restores it."""
+        """Close a pane and push a bounded Undo snapshot so Ctrl+Shift+T restores it."""
         space = self._db.get_space(space_id)
         if space is None:
             return None
@@ -162,20 +164,31 @@ class SpaceController:
             closed_at=now if now is not None else time.monotonic(),
         )
         self._undo_stack.append(snapshot)
+        if len(self._undo_stack) > MAX_UNDO_HISTORY:
+            self._undo_stack = self._undo_stack[-MAX_UNDO_HISTORY:]
         self.save_layout(space_id, updated)
         return snapshot
 
-    def undo_last_close(self, now: float | None = None) -> ClosedPaneSnapshot | None:
+    def undo_last_close(
+        self,
+        now: float | None = None,
+        *,
+        enforce_window: bool = False,
+    ) -> ClosedPaneSnapshot | None:
         """Restore the most recently closed pane if still available."""
-        if not self._undo_stack:
-            return None
-        snapshot = self._undo_stack.pop()
-        space = self._db.get_space(snapshot.space_id)
-        if space is None:
-            return None
-        space.layout_json = snapshot.previous_layout_json
-        self._db.upsert_space(space)
-        return snapshot
+        while self._undo_stack:
+            snapshot = self._undo_stack.pop()
+            if enforce_window:
+                ts = now if now is not None else time.monotonic()
+                if (ts - snapshot.closed_at) > UNDO_WINDOW_SECONDS:
+                    continue
+            space = self._db.get_space(snapshot.space_id)
+            if space is None:
+                continue
+            space.layout_json = snapshot.previous_layout_json
+            self._db.upsert_space(space)
+            return snapshot
+        return None
 
     def assign_account(self, space_id: str, pane_id: str, account_id: str | None) -> bool:
         root = self.get_layout(space_id)
